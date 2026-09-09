@@ -1,0 +1,31 @@
+# App of apps. Applied once by an operator; from then on every other Application
+# is added, changed or removed by committing to platform/argocd/applications.
+#
+# It deliberately excludes itself: a root Application that manages its own
+# definition can prune the controller's own entry point during a bad sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: idp
+  source:
+    repoURL: https://github.com/OWNER/platform-engineering-idp.git
+    targetRevision: main
+    path: platform/argocd/applications
+    directory:
+      recurse: false
+      exclude: root.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+  revisionHistoryLimit: 10

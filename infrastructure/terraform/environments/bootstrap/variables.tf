@@ -53,3 +53,9 @@ variable "cost_centre" {
   type        = string
   default     = "platform-idp"
 }
+
+variable "image_repository_prefix" {
+  description = "ECR repository name prefix the publishing role may write to. Must match the dev environment's cluster_name prefix."
+  type        = string
+  default     = "idp-"
+}

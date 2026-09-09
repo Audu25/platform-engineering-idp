@@ -8,9 +8,15 @@ on:
 permissions:
   contents: read
 
+# Superseded pull request pushes are cancelled, but a run on main may already be
+# publishing an image, so those are allowed to finish.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  ECR_REPOSITORY: idp-dev/sample-service
+  GITOPS_FILE: gitops/environments/dev/sample-service.yaml
 
 jobs:
   test:
@@ -43,7 +49,50 @@ jobs:
         with:
           version: v3.19.0
       - run: helm lint --strict platform/helm/sample-service
+      - run: helm lint --strict platform/helm/sample-service --values platform/helm/sample-service/values-dev.yaml
       - run: helm template sample platform/helm/sample-service --namespace idp-dev > /tmp/sample-service.yaml
+
+      # A promoted digest has to reach the container image reference. If it
+      # rendered as a tag, deployments would follow whatever that tag points at
+      # and the whole promotion mechanism would be decorative.
+      - name: Check that a promoted digest reaches the rendered image
+        run: |
+          set -euo pipefail
+          zeros=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          rendered=$(helm template sample platform/helm/sample-service \
+            --namespace idp-dev \
+            --set image.repository=example.com/sample-service \
+            --set image.tag=v1 \
+            --set image.digest="${zeros}" | grep -m1 'image:')
+          echo "${rendered}"
+          case "${rendered}" in
+            *"example.com/sample-service@${zeros}"*) ;;
+            *) echo 'The digest did not reach the image reference.'; exit 1 ;;
+          esac
+
+      # The promotion script writes the file Argo CD deploys from, so its
+      # validation is exercised here rather than discovered during a release.
+      - name: Check the promotion script
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          digest=sha256:1111111111111111111111111111111111111111111111111111111111111111
+          platform/scripts/promote-image.sh --file "${scratch}/dev.yaml" \
+            --repository example.com/sample-service --tag abc123 --digest "${digest}"
+          grep -q "digest: \"${digest}\"" "${scratch}/dev.yaml"
+          if platform/scripts/promote-image.sh --file "${scratch}/dev.yaml" \
+            --repository example.com/sample-service --tag abc123 --digest not-a-digest; then
+            echo 'A malformed digest was accepted.'; exit 1
+          fi
+          grep -q "digest: \"${digest}\"" "${scratch}/dev.yaml"
+
+      - name: Render the Argo CD installation
+        run: |
+          set -euo pipefail
+          kubectl kustomize platform/argocd/install > /tmp/argocd-install.yaml
+          grep -q 'kind: Namespace' /tmp/argocd-install.yaml
+          grep -q 'argoproj.io' /tmp/argocd-install.yaml
+
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: 1.14.5
@@ -57,6 +106,12 @@ jobs:
     needs: [test, configuration]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write   # Requested only by the publish steps on main.
+    outputs:
+      repository: ${{ steps.push.outputs.repository }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -82,4 +137,109 @@ jobs:
           fail-build: true
           severity-cutoff: high
           output-format: table
-      # Publishing and GitOps promotion are introduced in Phase 3.
+
+      # Everything below runs only for a merge to main, and only once AWS is
+      # configured. The image pushed is the one the steps above just scanned;
+      # pull requests build and scan the same image but cannot publish it.
+      - name: Assume the image publish role
+        id: aws
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_REGION != '' }}
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ secrets.AWS_IMAGE_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: image-publish-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        if: steps.aws.outcome == 'success'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      # Repository tags are immutable, so re-running a build for a commit that
+      # was already published reuses the published digest instead of failing.
+      - name: Push the image and record its digest
+        id: push
+        if: steps.ecr.outcome == 'success'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          target="${REGISTRY}/${ECR_REPOSITORY}"
+          published=$(aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${GITHUB_SHA}" \
+            --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+          if [ -n "${published}" ] && [ "${published}" != 'None' ]; then
+            echo "Tag ${GITHUB_SHA} is already published as ${published}."
+            digest="${published}"
+          else
+            docker tag "sample-service:${GITHUB_SHA}" "${target}:${GITHUB_SHA}"
+            docker push "${target}:${GITHUB_SHA}"
+            digest=$(docker image inspect "${target}:${GITHUB_SHA}" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | grep "^${target}@" | head -n 1 | cut -d@ -f2)
+          fi
+          test -n "${digest}"
+          echo "repository=${target}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Published \`${target}@${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # Deployment is a reviewable Git change rather than a side effect of the build:
+  # CI proposes the digest and a human merges it. Argo CD syncs from main, so
+  # merging is the deployment and reverting the merge is the rollback.
+  promote:
+    needs: container
+    if: needs.container.outputs.digest != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Credentials are kept here on purpose: this job pushes a branch. It is the
+      # only job in the pipeline that can write to the repository.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+
+      - name: Write the promoted digest into deployment state
+        env:
+          IMAGE_REPOSITORY: ${{ needs.container.outputs.repository }}
+          IMAGE_DIGEST: ${{ needs.container.outputs.digest }}
+        run: |
+          platform/scripts/promote-image.sh \
+            --file "${GITOPS_FILE}" \
+            --repository "${IMAGE_REPOSITORY}" \
+            --tag "${GITHUB_SHA}" \
+            --digest "${IMAGE_DIGEST}"
+
+      - name: Open the promotion pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ needs.container.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "${GITOPS_FILE}"; then
+            echo 'Deployment state already names this digest; nothing to promote.'
+            exit 0
+          fi
+          short="${GITHUB_SHA:0:12}"
+          branch="promote/sample-service-${short}"
+          title="Promote sample-service ${short} to dev"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "${branch}"
+          git add "${GITOPS_FILE}"
+          git commit -m "${title}"
+          git push --force-with-lease origin "${branch}"
+          cat > "${RUNNER_TEMP}/pr-body.md" <<EOF
+          Automated promotion of the image built and scanned on \`${GITHUB_SHA}\`.
+
+          - Digest: \`${IMAGE_DIGEST}\`
+          - Deployment state: \`${GITOPS_FILE}\`
+
+          Merging this deploys it. Reverting the merge rolls it back.
+          EOF
+          gh pr create --base main --head "${branch}" \
+            --title "${title}" --body-file "${RUNNER_TEMP}/pr-body.md" \
+            || gh pr edit "${branch}" --title "${title}" --body-file "${RUNNER_TEMP}/pr-body.md"

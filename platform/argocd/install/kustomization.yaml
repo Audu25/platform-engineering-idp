@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+
+# Argo CD is installed from a pinned upstream release rather than a floating
+# `stable` reference, so an unrelated `kubectl apply` can never silently move the
+# control plane to a new minor version. Bump this tag deliberately, and read the
+# upgrade notes for the release: Argo CD stores Application state in CRDs.
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.2/manifests/install.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: argocd
+
+# The non-HA manifests run a single replica of each component. That is right for
+# a development cluster on two spot nodes; production uses manifests/ha.

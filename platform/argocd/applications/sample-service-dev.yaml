@@ -1,0 +1,47 @@
+# Two sources, one Application: the chart supplies how the workload runs, the
+# gitops directory supplies which image bytes run. Splitting them means the
+# promotion job needs write access to deployment state only, never to the
+# security context, probes or resource limits it deploys under.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-service-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: idp
+  sources:
+    # Referenced by the $values alias below; contributes no manifests itself.
+    - repoURL: https://github.com/OWNER/platform-engineering-idp.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/OWNER/platform-engineering-idp.git
+      targetRevision: main
+      path: platform/helm/sample-service
+      helm:
+        releaseName: sample
+        # The chart's own values.yaml is always the base; these layer over it.
+        valueFiles:
+          - values-dev.yaml
+          - $values/gitops/environments/dev/sample-service.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: idp-dev
+  syncPolicy:
+    # Automated sync is what makes Git the source of truth rather than a record
+    # of intent: a revert is a deployment, with no operator action in between.
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m
+  # Enough history to roll back through the UI without keeping every sync.
+  revisionHistoryLimit: 10

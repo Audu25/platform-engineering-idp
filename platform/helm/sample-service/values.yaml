@@ -2,6 +2,9 @@ replicaCount: 2
 image:
   repository: sample-service
   tag: "0.1.0"
+  # Set by GitOps promotion. When present it wins over the tag, so the running
+  # workload is the exact image CI built and scanned.
+  digest: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 service:

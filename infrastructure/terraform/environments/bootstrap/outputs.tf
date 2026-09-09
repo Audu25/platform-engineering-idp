@@ -28,3 +28,8 @@ output "backend_hcl" {
     use_lockfile = true
   EOT
 }
+
+output "image_publish_role_arn" {
+  description = "Role ARN for the CI image publish job; store as the AWS_IMAGE_PUBLISH_ROLE_ARN secret."
+  value       = aws_iam_role.image_publish.arn
+}

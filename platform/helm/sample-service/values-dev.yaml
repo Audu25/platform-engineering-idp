@@ -1,4 +1,11 @@
-# Replace OWNER and COMMIT_SHA after publishing an image in Phase 3.
-image:
-  repository: ghcr.io/OWNER/sample-service
-  tag: "COMMIT_SHA"
+# Environment shape only. The image identity for dev lives in
+# gitops/environments/dev/sample-service.yaml, which CI promotion rewrites and
+# Argo CD layers on top of this file.
+replicaCount: 2
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi

@@ -11,3 +11,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
+
+{{/*
+A digest pins the exact bytes that were scanned, which a tag cannot do even when
+the registry enforces immutability. Promotion writes the digest, so deployments
+resolve by digest and the tag remains only for human identification.
+*/}}
+{{- define "sample-service.image" -}}
+{{- $digest := .Values.image.digest | default "" -}}
+{{- if $digest -}}
+{{- printf "%s@%s" .Values.image.repository $digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | toString) -}}
+{{- end -}}
+{{- end -}}

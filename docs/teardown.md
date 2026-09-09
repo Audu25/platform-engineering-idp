@@ -27,7 +27,21 @@ Kubernetes creates AWS resources that Terraform does not know about. Deleting th
 cluster first strands them, and a stranded load balancer keeps billing and blocks
 VPC deletion. Remove Kubernetes-owned resources first.
 
-1. **Remove workloads that own AWS resources.**
+1. **Stop Argo CD reconciling.** Self-heal recreates anything deleted underneath it,
+   so removing workloads before the Applications turns teardown into a loop.
+
+   ```bash
+   kubectl -n argocd delete application --all
+   kubectl -n argocd get application            # must be empty before continuing
+   ```
+
+   The Applications carry `resources-finalizer.argocd.argoproj.io`, so deletion
+   cascades to their workloads and only completes while the Argo CD controller is
+   still running. Delete the Applications before the namespace, never after: a
+   finalizer with no controller left to clear it blocks deletion indefinitely, and
+   recovering means editing the finalizer out by hand.
+
+2. **Remove workloads that own AWS resources.**
 
    ```bash
    kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer
@@ -38,7 +52,7 @@ VPC deletion. Remove Kubernetes-owned resources first.
    Wait until the load balancers and volumes are actually gone before continuing;
    deletion is asynchronous.
 
-2. **Confirm nothing is left behind.**
+3. **Confirm nothing is left behind.**
 
    ```bash
    aws elbv2 describe-load-balancers --query 'LoadBalancers[?VpcId==`VPC_ID`].LoadBalancerArn'
@@ -48,7 +62,7 @@ VPC deletion. Remove Kubernetes-owned resources first.
 
    Unattached volumes and unassociated Elastic IPs both bill continuously.
 
-3. **Destroy the environment.**
+4. **Destroy the environment.**
 
    ```bash
    terraform -chdir=infrastructure/terraform/environments/dev destroy
@@ -57,7 +71,7 @@ VPC deletion. Remove Kubernetes-owned resources first.
    Review the plan before confirming. Destroy takes roughly 15-20 minutes, most of
    it waiting on the node group and the control plane.
 
-4. **Empty ECR if the repositories block deletion.** Repositories are created with
+5. **Empty ECR if the repositories block deletion.** Repositories are created with
    `force_delete = false`, so a repository holding images fails to destroy. That is
    intentional: it forces a conscious decision before deleting published images.
 
@@ -66,7 +80,12 @@ VPC deletion. Remove Kubernetes-owned resources first.
      --image-ids "$(aws ecr list-images --repository-name idp-dev/sample-service --query 'imageIds[*]' --output json)"
    ```
 
-5. **Verify the account is quiet.** Check the Cost Explorer daily view filtered on
+   Deleting images destroys every rollback target. Keeping the repositories and
+   destroying only the environment is usually the better trade: ECR storage for
+   twenty small images costs cents per month, and the digests recorded in
+   `gitops/` stay resolvable.
+
+6. **Verify the account is quiet.** Check the Cost Explorer daily view filtered on
    `CostCentre=platform-idp` the following day. A resource missed today shows up as
    tomorrow's charge.
 
@@ -91,6 +110,20 @@ terraform apply
 aws eks update-kubeconfig --region eu-west-2 --name idp-dev
 kubectl get nodes
 ```
+
+Then reinstall the delivery layer, which lives entirely in Git:
+
+```bash
+kubectl kustomize platform/argocd/install | kubectl apply -f -
+kubectl apply -f platform/kubernetes/namespace.yaml
+kubectl apply -f platform/argocd/project.yaml
+kubectl apply -f platform/argocd/applications/root.yaml
+```
+
+Argo CD then restores the workloads from the digests recorded in `gitops/`, with no
+republishing and no promotion needed: the rebuilt cluster runs the same image bytes
+it ran before. Argo CD's own admin password and any UI-only settings are not in Git
+and are recreated fresh.
 
 State is preserved in S3, so a rebuild produces the same cluster name and
 addressing. Node and load balancer addresses change; anything pinned to them

@@ -1,0 +1,9 @@
+# Deployment state for sample-service in dev. Rewritten by the promotion job in
+# .github/workflows/ci.yaml; edit by hand only to force a specific image.
+#
+# This file is the whole deployment interface: changing it is what deploys, and
+# reverting the commit that changed it is what rolls back.
+image:
+  repository: PENDING_FIRST_PROMOTION
+  tag: "PENDING_FIRST_PROMOTION"
+  digest: ""

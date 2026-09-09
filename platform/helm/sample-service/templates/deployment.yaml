@@ -42,7 +42,7 @@ spec:
               {{- include "sample-service.selectorLabels" . | nindent 14 }}
       containers:
         - name: api
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "sample-service.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

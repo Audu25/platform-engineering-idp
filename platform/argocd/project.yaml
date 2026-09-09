@@ -4,11 +4,16 @@ metadata:
   name: idp
   namespace: argocd
 spec:
-  description: Sample application delivery to the development namespace
+  description: Platform-owned delivery to the development namespace
   sourceRepos:
     - https://github.com/OWNER/platform-engineering-idp.git
   destinations:
     - namespace: idp-dev
+      server: https://kubernetes.default.svc
+    # The app-of-apps writes child Applications back into argocd. Only the
+    # Application kind is whitelisted below, so this destination cannot be used
+    # to place workloads next to the control plane.
+    - namespace: argocd
       server: https://kubernetes.default.svc
   # Cluster resources (including namespaces) are bootstrapped separately.
   clusterResourceWhitelist: []
@@ -17,3 +22,5 @@ spec:
       kind: Deployment
     - group: ""
       kind: Service
+    - group: argoproj.io
+      kind: Application

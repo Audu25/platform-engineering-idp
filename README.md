@@ -1,14 +1,14 @@
 # Platform Engineering IDP
 
 A portfolio Internal Developer Platform that will let application developers
-create and deploy services through Backstage without maintaining infrastructure,
-Kubernetes manifests or delivery pipelines themselves.
+create and deploy services through Backstage without maintaining infrastructure, Kubernetes manifests or delivery pipelines themselves.
 
-**Current scope: Phase 2 AWS infrastructure.** The API and deployment definitions
-are implemented, and the AWS environment is now applyable: remote state, OIDC-based
-CI identity, a private registry, versioned cluster add-ons and a gated apply
-workflow. Backstage, automated delivery and the shared platform components will be
-built incrementally across [eight phases](docs/roadmap.md).
+**Current scope: Phase 3 GitOps delivery.** The API and deployment definitions are
+implemented, the AWS environment is applyable, and the delivery path is closed: a
+merge publishes a scanned image to ECR by digest, a promotion pull request moves
+that digest into deployment state, and Argo CD reconciles it into the cluster.
+Backstage and the shared platform components will be built incrementally across
+[eight phases](docs/roadmap.md).
 This is a production-oriented development foundation, not a production deployment.
 
 ```mermaid
@@ -17,9 +17,9 @@ flowchart TD
   Backstage --> Template[Service template: Phase 4]
   Template --> Repo[GitHub application repository]
   Repo --> CI[GitHub Actions: test, build, scan]
-  CI --> Registry[Image registry: Phase 3 publishing]
-  Registry --> GitOps[GitOps image promotion: Phase 3]
-  GitOps --> Argo[Argo CD: Phase 1 manifest, Phase 3 installation]
+  CI --> Registry[Amazon ECR: publish by digest]
+  Registry --> GitOps[Promotion pull request: gitops/]
+  GitOps --> Argo[Argo CD: automated sync]
   Argo --> EKS[Kubernetes / EKS: Phase 2 provisioning]
   EKS --> Observability[Prometheus / Grafana / OpenTelemetry: Phase 5]
   EKS --> Security[Kyverno / External Secrets: Phase 6]
@@ -42,20 +42,28 @@ platform-engineering-idp/
 │           └── ecr/             # Per-service image repositories and retention
 ├── platform/
 │   ├── helm/sample-service/     # Deployment and ClusterIP Service
-│   ├── argocd/                  # Scoped AppProject and Application
+│   ├── argocd/
+│   │   ├── install/            # Pinned Argo CD installation
+│   │   ├── applications/       # App-of-apps root and per-service Applications
+│   │   └── project.yaml        # Scoped AppProject
+│   ├── scripts/                # Image promotion
 │   └── kubernetes/              # Bootstrap namespace
+├── gitops/
+│   └── environments/dev/       # Deployed image digests; written by promotion
 ├── .github/
-│   ├── workflows/ci.yaml       # Tests, chart and Terraform checks, image build/scan
+│   ├── workflows/ci.yaml       # Tests, checks, build/scan, publish, promote
 │   ├── workflows/terraform.yaml # Plan on pull requests, gated apply on main
 │   └── dependabot.yml
 ├── docs/                       # Plans, roadmap, teardown runbook and evidence
 └── README.md
 ```
 
-Application source, cloud resources and platform configuration have separate
-ownership boundaries. A monorepo makes Phase 1 easy to inspect and clone. Phase 3
-will separate the GitOps repository; Phase 4 templates will create service repos.
-GitHub requires workflows in the root `.github/workflows` directory.
+Application source, cloud resources, platform configuration and deployment state
+have separate ownership boundaries. A monorepo keeps the project inspectable in one
+clone; [`gitops/README.md`](gitops/README.md) explains why deployment state is a
+directory here rather than a second repository, and what splitting it would cost.
+Phase 4 templates will create per-service repositories. GitHub requires workflows in
+the root `.github/workflows` directory.
 
 ## Run and test the API
 
@@ -112,9 +120,10 @@ only the package metadata and source; a builder stage is unnecessary without
 compilation or dependencies. The process uses the image's `node` user (UID 1000),
 exec-form startup and an unprivileged port. The Docker health check is useful
 outside Kubernetes; Kubernetes uses its own probes. No writable filesystem is needed.
-The base tag receives security patches via `--pull`; this means builds are not yet
-bit-for-bit reproducible. Phase 3 will pin and regularly refresh the base digest
-and promote application image digests. Dependabot proposes dependency updates.
+The base tag receives security patches via `--pull`; this means builds are repeatable
+but not bit-for-bit reproducible. Application images are now promoted by digest, so
+what runs is exactly what was scanned; pinning and refreshing the *base* image digest
+is still outstanding. Dependabot proposes dependency updates.
 
 ## Inspect or deploy the Helm chart
 
@@ -134,11 +143,15 @@ kubectl rollout status deployment/sample-sample-service -n idp-dev
 kubectl port-forward -n idp-dev svc/sample-sample-service 8080:80
 ```
 
-The default image is local `sample-service:0.1.0`; no image has been published.
-For a registry deployment, append `--set image.repository=REGISTRY/sample-service
---set-string image.tag=COMMIT_SHA` to the Helm command. For a private registry,
-configure access with `imagePullSecrets` using a pre-existing secret, or ECR node
-identity once Phase 2 is configured. Never put registry credentials in values files.
+The chart default is the local `sample-service:0.1.0`. `values-dev.yaml` now carries
+environment shape only; the image identity lives in
+[`gitops/environments/dev/sample-service.yaml`](gitops/environments/dev/sample-service.yaml)
+and reaches the chart through `image.digest`, which takes precedence over
+`image.tag`. To deploy a specific image by hand, append `--set
+image.repository=REGISTRY/sample-service --set image.digest=sha256:...`. For a
+private registry, configure access with `imagePullSecrets` using a pre-existing
+secret; ECR in this account needs none, because the node role can pull. Never put
+registry credentials in values files.
 
 **Why Helm:** one reusable chart is the future service template's deployment
 contract. Values expose images, replicas, resources, Service port and pull secrets.
@@ -250,8 +263,8 @@ these roles from any other repository on GitHub.
 
 `modules/ecr` creates one repository per service. **Tags are immutable**, so a
 deployed digest can never be silently replaced — that is what makes the image
-reference recorded in Git trustworthy once Argo CD is driving deployments in
-Phase 3. Scan-on-push gives a registry-side vulnerability view independent of the
+reference recorded in Git trustworthy now that Argo CD drives deployments.
+Scan-on-push gives a registry-side vulnerability view independent of the
 CI-side Grype gate. A lifecycle policy expires untagged layers after seven days and
 keeps twenty tagged images, bounding storage cost while leaving rollback targets.
 `force_delete` is off, so destroying a repository that still holds images requires a
@@ -291,6 +304,16 @@ Pull requests, pushes to `main`, and manual dispatch run three jobs:
 3. **Container:** after both pass, build a commit-tagged image, test it with the same
    read-only/capability/resource restrictions, verify graceful shutdown, then scan
    image packages with Anchore/Grype. High and critical vulnerabilities fail the job.
+   On `main` only, the job then assumes the publish role, pushes that same image to
+   ECR and records its digest. Re-running a build for an already published commit
+   reuses the published digest rather than failing against the immutable tag.
+4. **Promote:** rewrites `gitops/environments/dev/sample-service.yaml` with the new
+   digest and opens a pull request containing that single change. It is the only job
+   that keeps checkout credentials, and the only one that can write to the repository.
+
+The configuration job also asserts that a set digest reaches the rendered container
+image reference, and exercises the promotion script's digest validation. A promotion
+mechanism that silently rendered a tag would look identical in review.
 
 A second workflow, `terraform.yaml`, handles infrastructure. Pull requests touching
 `infrastructure/terraform/**` get a plan posted as a comment; merging to `main` runs
@@ -305,59 +328,76 @@ rather than cancelled, because cancelling mid-apply leaves a held state lock.
 
 Actions are pinned to full commit IDs, tokens have read-only repository permissions
 by default, checkout does not retain credentials, and jobs have timeouts. `id-token:
-write` is granted only in the jobs that authenticate to AWS. The foundation workflow
-requires no cloud secrets and does not publish images or deploy.
+write` is granted only in the jobs that authenticate to AWS, and the publish steps
+are additionally gated on the event being a push to `main`, so a pull request — from
+a fork or otherwise — builds and scans the image but can never publish it.
 Configure `test`, `configuration`, and `container` as required branch-protection
 checks after creating the GitHub repository. Image scans depend on the vulnerability
 database and may reveal new findings without source changes; refresh the base image
 or review a narrowly justified exception instead of disabling the gate. These are
 basic dependency/image checks, not a full security audit or IaC policy evaluation.
 
-## Argo CD handoff
+## GitOps delivery
 
-The Application tracks `main`, renders the service chart with `values-dev.yaml`,
-and targets only `idp-dev`. A dedicated AppProject permits this source repository
-and only namespaced Deployments and Services. Namespace creation is bootstrapped
-separately to keep cluster-level privileges out of application delivery.
+Argo CD reconciles `main` into the cluster. The [Phase 3 runbook](docs/phase-3-plan.md)
+has the installation and delivery procedure; this is what it is made of.
 
-Before using the manifests, install Argo CD in Phase 3, push this project to GitHub,
-replace `OWNER` in both Argo CD manifests, and replace the image repository and
-`COMMIT_SHA` in `values-dev.yaml` with a published image. Use lowercase GHCR names,
-or replace that illustrative URL with ECR. Configure Argo CD repository access if
-the repository is private and image pull access if the image is private.
+**Installation** is a pinned upstream release, not `stable`, so no unrelated apply
+can move the control plane to a new minor version:
 
 ```powershell
+kubectl kustomize platform/argocd/install | kubectl apply -f -
 kubectl apply -f platform/kubernetes/namespace.yaml
 kubectl apply -f platform/argocd/project.yaml
-kubectl apply -f platform/argocd/sample-service.yaml
-# With the Argo CD CLI installed and authenticated:
-argocd app sync sample-service-dev
-argocd app wait sample-service-dev --health --timeout 180
+kubectl apply -f platform/argocd/applications/root.yaml
 ```
 
-Sync is manual and automated pruning is absent while bootstrap is under development.
-Phase 3 introduces the separate GitOps repository, image publishing/promotion and
-automated reconciliation. Do not manage the same release with both manual Helm and
-Argo CD once that transition is complete. The current placeholders are intentionally
-non-deployable until a real repository and published image exist.
+**An app-of-apps** watches `platform/argocd/applications`, so adding a service is a
+commit rather than a `kubectl apply`. It excludes its own definition: a root
+Application that manages itself can prune the controller's entry point during a bad
+sync. The AppProject and root are therefore applied once by hand.
+
+**The service Application has two sources.** The chart supplies how the workload runs;
+`gitops/environments/dev/sample-service.yaml`, referenced through Argo CD's `$values`
+alias, supplies which image runs. That split is the point: CI's promotion job writes
+deployment state and cannot touch the probes, resource limits or security context it
+is deploying under.
+
+**Sync is automated with self-heal and prune,** which is what makes Git the source of
+truth rather than a record of intent — a revert is a deployment, with no operator
+action in between. Scaling the Deployment by hand is reverted by the controller. Do
+not manage the same release with both manual Helm and Argo CD.
+
+Before using the manifests, push this project to GitHub and replace `OWNER` in
+`project.yaml` and in both files under `platform/argocd/applications/`; the AppProject
+restricts sources to that exact repository URL. Configure Argo CD repository access if
+the repository is private. Until the first promotion, deployment state names
+`PENDING_FIRST_PROMOTION` and is intentionally non-deployable.
+
+The Argo CD server is not exposed; reach it with `kubectl -n argocd port-forward
+svc/argocd-server 8080:443`. That avoids paying for a load balancer and avoids
+publishing an admin interface during development.
 
 ## Validation and next work
 
 See [local verification](docs/validation.md), the [Phase 1 plan](docs/phase-1-plan.md),
-the [Phase 2 runbook](docs/phase-2-plan.md), the [teardown runbook](docs/teardown.md)
-and the [phase acceptance criteria](docs/roadmap.md).
+the [Phase 2 runbook](docs/phase-2-plan.md), the [Phase 3 runbook](docs/phase-3-plan.md),
+the [teardown runbook](docs/teardown.md) and the
+[phase acceptance criteria](docs/roadmap.md).
 
-Phase 2 configuration is written and validates locally, but **nothing has been
-applied to AWS**. The state bucket, roles, registry, add-ons and spot node group are
-unverified against a real account until the bootstrap and dev roots are applied and
-the checks in the Phase 2 runbook pass. Terraform validation checks configuration and
-provider schemas, not permissions, quotas, regional capacity or successful
-provisioning.
+Phase 2 and Phase 3 configuration is written and validates locally, but **nothing has
+been applied to AWS and no image has been published**. The state bucket, roles,
+registry, add-ons and spot node group are unverified against a real account until the
+bootstrap and dev roots are applied. Argo CD's installation renders correctly and the
+chart renders a promoted digest, but no cluster has reconciled it: rendering is not
+admission, and a Synced Application is not a proven rollout. Terraform validation
+checks configuration and provider schemas, not permissions, quotas, regional capacity
+or successful provisioning.
 
-The next milestone is Phase 3: install Argo CD, publish images to ECR through OIDC,
-and promote them by digest through a GitOps repository. Backstage, Prometheus,
-Grafana, OpenTelemetry, External Secrets and Kyverno are intentionally roadmap items,
-not empty services.
+The next milestone is Phase 4: a Backstage catalog and a service template that
+scaffolds a repository wired to this delivery path. Prometheus, Grafana,
+OpenTelemetry, External Secrets and Kyverno are intentionally roadmap items, not
+empty services.
 
 ## References
 
@@ -366,4 +406,7 @@ not empty services.
 - [Terraform AWS provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs): resource configuration.
 - [Terraform S3 backend](https://developer.hashicorp.com/terraform/language/backend/s3): state storage and native locking.
 - [Argo CD Application specification](https://argo-cd.readthedocs.io/en/stable/user-guide/application-specification/): Git source, Helm values and sync behavior.
+- [Argo CD multiple sources](https://argo-cd.readthedocs.io/en/stable/user-guide/multiple_sources/): the `$values` reference used to layer deployment state over the chart.
+- [Argo CD cluster bootstrapping](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/): the app-of-apps pattern.
+- [Configuring OpenID Connect in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws): subject claims and trust policy conditions.
 - [Anchore scan action](https://github.com/anchore/scan-action): image scan inputs and severity gate.
