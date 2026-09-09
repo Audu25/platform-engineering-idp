@@ -1,0 +1,7 @@
+aws_region         = "eu-west-2"
+availability_zones = ["eu-west-2a", "eu-west-2b"]
+cluster_name       = "idp-dev"
+cluster_version    = "1.35"
+admin_role_arn     = "arn:aws:iam::123456789012:role/REPLACE_WITH_PLATFORM_ADMIN"
+# Leave empty for private-only access, or set your trusted public IPv4 /32.
+public_access_cidrs = []

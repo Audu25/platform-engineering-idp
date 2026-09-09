@@ -1,0 +1,7 @@
+apiVersion: v2
+name: sample-service
+description: Reference stateless API for the Internal Developer Platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"

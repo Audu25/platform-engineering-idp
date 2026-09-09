@@ -1,0 +1,83 @@
+name: Foundation CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/sample-service
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - name: Audit application dependencies
+        run: npm audit --audit-level=high
+
+  configuration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v3.19.0
+      - run: helm lint --strict platform/helm/sample-service
+      - run: helm template sample platform/helm/sample-service --namespace idp-dev > /tmp/sample-service.yaml
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.14.5
+      - run: terraform fmt -check -recursive infrastructure/terraform
+      - run: terraform -chdir=infrastructure/terraform/environments/dev init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infrastructure/terraform/environments/dev validate
+
+  container:
+    needs: [test, configuration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --pull --tag sample-service:${{ github.sha }} apps/sample-service
+      - name: Smoke test the hardened container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name sample-service --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --memory=128m --cpus=0.5 \
+            -p 127.0.0.1:8080:8080 sample-service:${{ github.sha }}
+          trap 'docker logs sample-service; docker rm -f sample-service' EXIT
+          curl --fail --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:8080/readyz
+          curl --fail http://127.0.0.1:8080/healthz
+          docker stop --time 15 sample-service
+          test "$(docker inspect --format='{{.State.ExitCode}}' sample-service)" = '0'
+      - name: Scan image packages with Grype
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: sample-service:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+      # Publishing and GitOps promotion are introduced in Phase 3.

@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: idp
+  namespace: argocd
+spec:
+  description: Sample application delivery to the development namespace
+  sourceRepos:
+    - https://github.com/OWNER/platform-engineering-idp.git
+  destinations:
+    - namespace: idp-dev
+      server: https://kubernetes.default.svc
+  # Cluster resources (including namespaces) are bootstrapped separately.
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
+    - group: ""
+      kind: Service

@@ -1,0 +1,5 @@
+bucket       = "REPLACE_WITH_UNIQUE_STATE_BUCKET"
+key          = "idp/dev/terraform.tfstate"
+region       = "eu-west-2"
+encrypt      = true
+use_lockfile = true

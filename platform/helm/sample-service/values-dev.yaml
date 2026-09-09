@@ -1,0 +1,4 @@
+# Replace OWNER and COMMIT_SHA after publishing an image in Phase 3.
+image:
+  repository: ghcr.io/OWNER/sample-service
+  tag: "COMMIT_SHA"
