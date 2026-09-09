@@ -1,11 +1,10 @@
 provider "aws" {
   region = var.aws_region
-  # Applied to every taggable resource, so Cost Explorer can attribute spend to
-  # this project without tagging each resource by hand.
   default_tags {
     tags = {
       Project     = "platform-engineering-idp"
-      Environment = "dev"
+      Environment = "shared"
+      Component   = "bootstrap"
       ManagedBy   = "terraform"
       Owner       = var.owner
       CostCentre  = var.cost_centre

@@ -4,9 +4,11 @@ A portfolio Internal Developer Platform that will let application developers
 create and deploy services through Backstage without maintaining infrastructure,
 Kubernetes manifests or delivery pipelines themselves.
 
-**Current scope: Phase 1 foundation.** The API and deployment definitions are
-implemented. Backstage, automated delivery, and the shared platform components
-will be built incrementally across [eight phases](docs/roadmap.md).
+**Current scope: Phase 2 AWS infrastructure.** The API and deployment definitions
+are implemented, and the AWS environment is now applyable: remote state, OIDC-based
+CI identity, a private registry, versioned cluster add-ons and a gated apply
+workflow. Backstage, automated delivery and the shared platform components will be
+built incrementally across [eight phases](docs/roadmap.md).
 This is a production-oriented development foundation, not a production deployment.
 
 ```mermaid
@@ -31,18 +33,22 @@ platform-engineering-idp/
 │   └── sample-service/           # API, native tests, Dockerfile
 ├── infrastructure/
 │   └── terraform/
-│       ├── environments/dev/    # Provider, inputs, module composition, state examples
+│       ├── environments/
+│       │   ├── bootstrap/       # State bucket, GitHub OIDC provider, Terraform roles
+│       │   └── dev/             # Provider, inputs, module composition, backend
 │       └── modules/
 │           ├── network/         # VPC, subnets, routing and NAT
-│           └── eks/             # Cluster, IAM access, logs and managed workers
+│           ├── eks/             # Cluster, IAM access, logs, add-ons, managed workers
+│           └── ecr/             # Per-service image repositories and retention
 ├── platform/
 │   ├── helm/sample-service/     # Deployment and ClusterIP Service
 │   ├── argocd/                  # Scoped AppProject and Application
 │   └── kubernetes/              # Bootstrap namespace
 ├── .github/
-│   ├── workflows/ci.yaml
+│   ├── workflows/ci.yaml       # Tests, chart and Terraform checks, image build/scan
+│   ├── workflows/terraform.yaml # Plan on pull requests, gated apply on main
 │   └── dependabot.yml
-├── docs/                       # Plan, roadmap and validation evidence
+├── docs/                       # Plans, roadmap, teardown runbook and evidence
 └── README.md
 ```
 
@@ -173,37 +179,106 @@ Workers receive no public IPs. Subnet tags prepare for later load balancer disco
 can incur cross-AZ transfer charges; production needs per-AZ NAT or an evaluated
 private endpoint design. VPC flow logs and endpoint restrictions are later hardening.
 
-EKS defaults to Kubernetes 1.35, a private API endpoint and two on-demand
-`t3.medium` AL2023 workers, with group bounds of two to three. No autoscaler is
-installed, so the maximum does not trigger automatic scaling. The managed node
-group simplifies patching; its launch template encrypts gp3 root disks and requires
+EKS defaults to Kubernetes 1.35, a private API endpoint and two `t3.medium`
+AL2023 workers, with group bounds of two to four. No autoscaler is installed, so
+the maximum is a bound rather than a scaling trigger. The managed node group
+simplifies patching; its launch template encrypts gp3 root disks and requires
 IMDSv2 with hop limit 1. All control-plane log types have 30-day retention.
 The cluster uses API-based access entries with no implicit creator administrator;
 an explicit existing IAM role receives administrator access. Narrow developer RBAC
-comes later. CNI permissions initially use the node role; Phase 6 will move them to
-dedicated workload identity. EKS bootstrap networking/DNS components are used for
-the foundation; explicitly versioned managed add-ons are Phase 2 work.
+comes later.
 
-Before Phase 2 provisioning:
+**Workers default to spot capacity.** Spot is roughly 70% cheaper, which is what
+makes an always-available portfolio cluster affordable, and the tradeoff is that a
+node can be reclaimed at two minutes notice. Two comparable instance types are
+listed so the request draws from a wider capacity pool, and `max_size` leaves
+headroom for replacements. Set `capacity_type = "ON_DEMAND"` before a live demo if
+a reclaimed node would be disruptive.
 
-1. Create an AWS account/role setup and review costs and region/AZ availability.
-2. Create an encrypted, versioned, public-access-blocked S3 state bucket with scoped
-   IAM access. Copy `backend.tf.example` to `backend.tf` and `backend.hcl.example`
-   to `backend.hcl`, replace the bucket, and initialize using
-   `terraform init -backend-config=backend.hcl` from `environments/dev`.
-   If local state already exists, use `-migrate-state` and verify migration.
-3. Copy `terraform.tfvars.example` to `terraform.tfvars`; replace the administrator
-   ARN. Choose private operator connectivity (VPN/VPC runner) or allow only your
-   trusted public IPv4 `/32` through `public_access_cidrs`. The public API rejects
-   `/0` in input validation. AWS CLI credentials must be supplied outside the repo.
-4. Review a saved Terraform plan before applying it. Check EKS version support and
-   instance capacity in your region, and confirm access using the configured role.
+Networking and DNS run as **explicitly versioned managed add-ons** rather than the
+unversioned components EKS installs at bootstrap: `vpc-cni`, `kube-proxy`,
+`eks-pod-identity-agent`, `coredns` and `aws-ebs-csi-driver`. Putting the version in
+state turns an upgrade into a reviewable plan change instead of silent drift.
+Versions resolve at plan time from `aws_eks_addon_version` rather than being
+hardcoded, because a pinned version may not exist in every region or Kubernetes
+release. Ordering is explicit: CNI and kube-proxy attach to the control plane, while
+CoreDNS and the CSI driver are scheduled workloads that wait for the node group.
 
-Backend examples are inactive so Phase 1 can validate without AWS. Do not use the
-default local state for a shared environment. State, tfvars, plans and backend
-configuration are ignored because they can hold sensitive values; lockfiles are
-committed. There is no Terraform apply workflow in this phase. Provisioning will
-incur EKS, EC2, NAT, public IPv4, storage and logging charges until cleaned up.
+The EBS CSI controller gets its permissions through **EKS Pod Identity**, not the
+node role, so a compromised workload cannot manage cluster storage. Pod Identity is
+preferred over IRSA here because it needs no OIDC provider, no certificate
+thumbprint and no trust policy rewrite when the cluster is replaced. Phase 6 extends
+the same mechanism to application workloads. CNI permissions still use the node
+role.
+
+## Remote state and CI identity
+
+`environments/bootstrap` is applied once, by an administrator, before anything else.
+It creates the state bucket and the identities CI uses, so it is the only root that
+cannot itself run through CI.
+
+The **state bucket** is versioned, encrypted, public-access-blocked and rejects
+plaintext HTTP through a bucket policy, because S3 permits it by default. Locking
+uses S3 native `use_lockfile` rather than a DynamoDB table, which removes a resource
+and its cost from the design; this is why Terraform 1.10+ is required. The bucket
+carries `prevent_destroy`: state is not reproducible from the repository, so losing
+it is worse than losing the infrastructure it describes. Old versions expire after
+90 days, retaining ten, so recovery stays possible without unbounded storage.
+
+Bootstrap keeps **local state** deliberately. Storing its state in the bucket it
+creates would be circular, and it describes only a bucket and two roles.
+
+CI authenticates with **GitHub OIDC**, so there are no AWS access keys in GitHub to
+leak or rotate. Two roles separate reading from writing:
+
+- `idp-terraform-plan` — `ReadOnlyAccess`, assumable from pull requests and `main`.
+  It also gets write access to the state prefix, because S3 native locking writes a
+  lock object beside the state and a strictly read-only role cannot plan.
+- `idp-terraform-apply` — assumable **only** from the `aws-dev` GitHub Environment.
+  The human approval gate lives on that environment, and the trust policy enforces
+  it, so a workflow that skips the gate cannot obtain write credentials at all.
+
+The apply role uses `PowerUserAccess`, which covers VPC, EKS, EC2, ECR and S3 while
+excluding IAM, so its blast radius stops short of the account's own permission
+model. EKS still needs to create roles, so that is granted back narrowly: only for
+role names under the `idp-` prefix, plus the specific service-linked roles EKS,
+node groups and spot require. The subject claim is matched against this exact
+repository rather than a wildcard, since that claim is the only thing separating
+these roles from any other repository on GitHub.
+
+## Image registry
+
+`modules/ecr` creates one repository per service. **Tags are immutable**, so a
+deployed digest can never be silently replaced — that is what makes the image
+reference recorded in Git trustworthy once Argo CD is driving deployments in
+Phase 3. Scan-on-push gives a registry-side vulnerability view independent of the
+CI-side Grype gate. A lifecycle policy expires untagged layers after seven days and
+keeps twenty tagged images, bounding storage cost while leaving rollback targets.
+`force_delete` is off, so destroying a repository that still holds images requires a
+conscious decision rather than silently deleting published artefacts.
+
+The registry is a separate module from the cluster because images outlive any single
+cluster; the environment can be destroyed and rebuilt without republishing.
+
+## Provisioning
+
+Follow the [Phase 2 runbook](docs/phase-2-plan.md) for the full sequence. In short:
+apply `environments/bootstrap`, record its outputs as GitHub secrets, create the
+`aws-dev` environment with a required reviewer, then initialise `environments/dev`
+with `terraform init -backend-config=backend.hcl`.
+
+Before applying, choose private operator connectivity (VPN or a VPC runner) or allow
+only your trusted public IPv4 `/32` through `public_access_cidrs`; the input
+validation rejects `/0`. State, tfvars, plans and backend configuration are
+gitignored because they can hold account-specific or sensitive values; lockfiles are
+committed.
+
+**This environment bills by the hour whether or not anything is deployed to it** —
+roughly $132/month on spot, $181/month on-demand, before usage-based charges. The
+[teardown runbook](docs/teardown.md) has an itemised breakdown and an ordered destroy
+procedure. Destroy order matters: load balancers and volumes created by Kubernetes
+are invisible to Terraform, and a stranded load balancer keeps billing and blocks
+VPC deletion.
 
 ## Continuous integration
 
@@ -217,9 +292,21 @@ Pull requests, pushes to `main`, and manual dispatch run three jobs:
    read-only/capability/resource restrictions, verify graceful shutdown, then scan
    image packages with Anchore/Grype. High and critical vulnerabilities fail the job.
 
-Actions are pinned to full commit IDs, tokens have read-only repository permissions,
-checkout does not retain credentials, and jobs have timeouts. The workflow uses
-ordinary PR events, requires no cloud secrets, and does not publish images or deploy.
+A second workflow, `terraform.yaml`, handles infrastructure. Pull requests touching
+`infrastructure/terraform/**` get a plan posted as a comment; merging to `main` runs
+the apply job, which pauses on the `aws-dev` environment until a reviewer approves.
+
+Plan and apply are separate jobs with separate AWS roles, so a pull request from a
+fork or an untrusted branch can never hold write credentials. The apply job plans
+and applies in the same step rather than passing a saved plan between jobs: the plan
+being applied is the one just computed against current state, and no plan file — which
+can contain resource values — is uploaded as an artifact. Concurrency is serialised
+rather than cancelled, because cancelling mid-apply leaves a held state lock.
+
+Actions are pinned to full commit IDs, tokens have read-only repository permissions
+by default, checkout does not retain credentials, and jobs have timeouts. `id-token:
+write` is granted only in the jobs that authenticate to AWS. The foundation workflow
+requires no cloud secrets and does not publish images or deploy.
 Configure `test`, `configuration`, and `container` as required branch-protection
 checks after creating the GitHub repository. Image scans depend on the vulnerability
 database and may reveal new findings without source changes; refresh the base image
@@ -256,13 +343,21 @@ non-deployable until a real repository and published image exist.
 
 ## Validation and next work
 
-See [local verification](docs/validation.md), the [original implementation plan](docs/phase-1-plan.md)
-and [phase acceptance criteria](docs/roadmap.md). Cloud apply, live cluster rollout,
-Argo CD reconciliation and a hosted CI run need their respective environments.
+See [local verification](docs/validation.md), the [Phase 1 plan](docs/phase-1-plan.md),
+the [Phase 2 runbook](docs/phase-2-plan.md), the [teardown runbook](docs/teardown.md)
+and the [phase acceptance criteria](docs/roadmap.md).
 
-The next milestone is Phase 2: establish AWS access and remote state, review a costed
-plan, then provision and verify EKS. Backstage, Prometheus, Grafana, OpenTelemetry,
-External Secrets and Kyverno are intentionally roadmap items, not empty services.
+Phase 2 configuration is written and validates locally, but **nothing has been
+applied to AWS**. The state bucket, roles, registry, add-ons and spot node group are
+unverified against a real account until the bootstrap and dev roots are applied and
+the checks in the Phase 2 runbook pass. Terraform validation checks configuration and
+provider schemas, not permissions, quotas, regional capacity or successful
+provisioning.
+
+The next milestone is Phase 3: install Argo CD, publish images to ECR through OIDC,
+and promote them by digest through a GitOps repository. Backstage, Prometheus,
+Grafana, OpenTelemetry, External Secrets and Kyverno are intentionally roadmap items,
+not empty services.
 
 ## References
 

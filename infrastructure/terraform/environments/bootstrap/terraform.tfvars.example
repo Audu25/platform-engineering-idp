@@ -1,0 +1,13 @@
+aws_region  = "eu-west-2"
+owner       = "REPLACE_WITH_YOUR_NAME_OR_TEAM"
+cost_centre = "platform-idp"
+
+# The repository allowed to assume the Terraform roles through OIDC.
+github_owner = "REPLACE_WITH_GITHUB_OWNER"
+github_repo  = "platform-engineering-idp"
+
+# GitHub Environment that gates apply. Create it with a required reviewer.
+apply_environment = "aws-dev"
+
+# Set to false if this AWS account already has a GitHub Actions OIDC provider.
+create_oidc_provider = true

@@ -50,6 +50,8 @@ jobs:
       - run: terraform fmt -check -recursive infrastructure/terraform
       - run: terraform -chdir=infrastructure/terraform/environments/dev init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infrastructure/terraform/environments/dev validate
+      - run: terraform -chdir=infrastructure/terraform/environments/bootstrap init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infrastructure/terraform/environments/bootstrap validate
 
   container:
     needs: [test, configuration]

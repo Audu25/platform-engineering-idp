@@ -1,0 +1,166 @@
+name: Terraform
+
+# Infrastructure changes are reviewed as a plan on the pull request and applied
+# only after a human approves the deployment environment on main.
+on:
+  pull_request:
+    paths:
+      - 'infrastructure/terraform/**'
+      - '.github/workflows/terraform.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/terraform/**'
+      - '.github/workflows/terraform.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two applies against one state would fight over the lock, so runs are serialised
+# per environment instead of cancelled mid-apply.
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: 1.14.5
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  WORKING_DIR: infrastructure/terraform/environments/dev
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write        # Required to request the OIDC token for AWS.
+      pull-requests: write   # Required to post the plan summary.
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Assume the read-only plan role
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: terraform-plan-${{ github.run_id }}
+
+      - name: Initialise remote state
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=idp/dev/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true" \
+            -lockfile=readonly
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive infrastructure/terraform
+
+      - name: Validate
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform validate
+
+      - name: Plan
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}
+        env:
+          TF_VAR_admin_role_arn: ${{ secrets.PLATFORM_ADMIN_ROLE_ARN }}
+        run: |
+          set -o pipefail
+          terraform plan -no-color -lock-timeout=5m -out=tfplan | tee plan.txt
+
+      # The plan is summarised in the job log and on the pull request. It is never
+      # uploaded as an artifact, because a plan file can contain resource values.
+      - name: Summarise the plan
+        if: always() && steps.plan.outcome != 'skipped'
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          {
+            echo '### Terraform plan'
+            echo '```terraform'
+            tail -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the plan on the pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('${{ env.WORKING_DIR }}/plan.txt', 'utf8');
+            const body = [
+              '### Terraform plan (dev)',
+              '```terraform',
+              plan.length > 60000 ? plan.slice(-60000) : plan,
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  apply:
+    needs: plan
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # The environment carries the required reviewer. The apply role's trust policy
+    # names this environment, so a run outside it cannot obtain write credentials.
+    environment: aws-dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Assume the gated apply role
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: terraform-apply-${{ github.run_id }}
+
+      - name: Initialise remote state
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=idp/dev/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true" \
+            -lockfile=readonly
+
+      # Planning and applying in one job means the applied plan is the one that was
+      # just reviewed against current state, with no artifact handoff in between.
+      - name: Plan and apply
+        working-directory: ${{ env.WORKING_DIR }}
+        env:
+          TF_VAR_admin_role_arn: ${{ secrets.PLATFORM_ADMIN_ROLE_ARN }}
+        run: |
+          terraform plan -no-color -lock-timeout=5m -out=tfplan
+          terraform apply -no-color -lock-timeout=5m -auto-approve tfplan
+
+      - name: Record outputs
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform output -no-color >> "$GITHUB_STEP_SUMMARY"

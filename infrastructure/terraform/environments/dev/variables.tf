@@ -49,7 +49,57 @@ variable "public_access_cidrs" {
   }
 }
 variable "instance_types" {
-  description = "x86_64 instance types for the managed development node group."
+  description = "x86_64 instance types. Several comparable types widen the spot capacity pool and reduce reclaim."
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.medium", "t3a.medium"]
+}
+
+variable "capacity_type" {
+  description = "SPOT keeps the development cluster affordable; ON_DEMAND removes reclaim risk for demos."
+  type        = string
+  default     = "SPOT"
+  validation {
+    condition     = contains(["SPOT", "ON_DEMAND"], var.capacity_type)
+    error_message = "capacity_type must be SPOT or ON_DEMAND."
+  }
+}
+
+variable "desired_size" {
+  description = "Starting worker count."
+  type        = number
+  default     = 2
+}
+
+variable "min_size" {
+  description = "Minimum worker count."
+  type        = number
+  default     = 2
+}
+
+variable "max_size" {
+  description = "Maximum worker count; headroom absorbs spot reclaim."
+  type        = number
+  default     = 4
+  validation {
+    condition     = var.max_size >= var.min_size
+    error_message = "max_size must be greater than or equal to min_size."
+  }
+}
+
+variable "service_names" {
+  description = "Services that receive an image repository."
+  type        = list(string)
+  default     = ["sample-service"]
+}
+
+variable "owner" {
+  description = "Cost allocation tag identifying the responsible person or team."
+  type        = string
+  default     = "platform-engineering"
+}
+
+variable "cost_centre" {
+  description = "Cost allocation tag used to group platform spend in Cost Explorer."
+  type        = string
+  default     = "platform-idp"
 }

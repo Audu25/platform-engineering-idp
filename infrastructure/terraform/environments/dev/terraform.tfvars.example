@@ -3,5 +3,21 @@ availability_zones = ["eu-west-2a", "eu-west-2b"]
 cluster_name       = "idp-dev"
 cluster_version    = "1.35"
 admin_role_arn     = "arn:aws:iam::123456789012:role/REPLACE_WITH_PLATFORM_ADMIN"
+
 # Leave empty for private-only access, or set your trusted public IPv4 /32.
 public_access_cidrs = []
+
+# Cost allocation tags applied to every resource in this environment.
+owner       = "REPLACE_WITH_YOUR_NAME_OR_TEAM"
+cost_centre = "platform-idp"
+
+# Development sizing. Switch to ON_DEMAND before a live demo if a reclaimed
+# spot node would be disruptive.
+capacity_type  = "SPOT"
+instance_types = ["t3.medium", "t3a.medium"]
+desired_size   = 2
+min_size       = 2
+max_size       = 4
+
+# One image repository is created per entry.
+service_names = ["sample-service"]

@@ -1,4 +1,0 @@
-# Phase 2: rename to backend.tf after creating a dedicated state bucket.
-terraform {
-  backend "s3" {}
-}

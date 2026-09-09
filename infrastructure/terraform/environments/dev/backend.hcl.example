@@ -1,4 +1,6 @@
-bucket       = "REPLACE_WITH_UNIQUE_STATE_BUCKET"
+# Copy to backend.hcl and replace the bucket with the bootstrap output.
+# backend.hcl is gitignored because it names account-specific infrastructure.
+bucket       = "REPLACE_WITH_STATE_BUCKET_FROM_BOOTSTRAP_OUTPUT"
 key          = "idp/dev/terraform.tfstate"
 region       = "eu-west-2"
 encrypt      = true

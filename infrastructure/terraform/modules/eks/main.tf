@@ -86,16 +86,16 @@ resource "aws_eks_node_group" "this" {
   subnet_ids      = var.subnet_ids
   instance_types  = var.instance_types
   ami_type        = "AL2023_x86_64_STANDARD"
-  capacity_type   = "ON_DEMAND"
+  capacity_type   = var.capacity_type
   version         = var.cluster_version
   launch_template {
     id      = aws_launch_template.nodes.id
     version = tostring(aws_launch_template.nodes.latest_version)
   }
   scaling_config {
-    desired_size = 2
-    min_size     = 2
-    max_size     = 3
+    desired_size = var.desired_size
+    min_size     = var.min_size
+    max_size     = var.max_size
   }
   update_config {
     max_unavailable = 1
