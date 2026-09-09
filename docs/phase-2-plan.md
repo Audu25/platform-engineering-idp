@@ -54,6 +54,9 @@ gh secret set AWS_APPLY_ROLE_ARN --body "$(terraform output -raw apply_role_arn)
 gh secret set PLATFORM_ADMIN_ROLE_ARN --body "arn:aws:iam::ACCOUNT:role/YOUR_ADMIN_ROLE"
 ```
 
+Both Terraform jobs are guarded on `vars.AWS_REGION`, so until the variable is set
+the workflow skips instead of failing. Setting it is what switches the workflow on.
+
 Then create the **`aws-dev`** environment with a required reviewer, under
 Settings > Environments. The apply role's trust policy names this environment, so
 without it the apply job cannot obtain credentials at all. The role ARNs are held as

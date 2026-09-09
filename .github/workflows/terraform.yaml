@@ -31,6 +31,9 @@ env:
 
 jobs:
   plan:
+    # Skips cleanly until the bootstrap outputs have been recorded, so the
+    # repository does not show a failing workflow before AWS is configured.
+    if: vars.AWS_REGION != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -115,7 +118,7 @@ jobs:
 
   apply:
     needs: plan
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: vars.AWS_REGION != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # The environment carries the required reviewer. The apply role's trust policy
