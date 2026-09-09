@@ -1,0 +1,13 @@
+{
+  "name": "${{ values.name }}",
+  "version": "0.1.0",
+  "private": true,
+  "description": "${{ values.description }}",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "check": "node --check src/app.js && node --check src/server.js"
+  }
+}

@@ -3,19 +3,21 @@
 A portfolio Internal Developer Platform that will let application developers
 create and deploy services through Backstage without maintaining infrastructure, Kubernetes manifests or delivery pipelines themselves.
 
-**Current scope: Phase 3 GitOps delivery.** The API and deployment definitions are
-implemented, the AWS environment is applyable, and the delivery path is closed: a
-merge publishes a scanned image to ECR by digest, a promotion pull request moves
-that digest into deployment state, and Argo CD reconciles it into the cluster.
-Backstage and the shared platform components will be built incrementally across
-[eight phases](docs/roadmap.md).
+**Current scope: Phase 4 developer self-service.** The API and deployment
+definitions are implemented, the AWS environment is applyable, the delivery path is
+closed, and creating a service is now a form rather than a checklist: the portal
+scaffolds a repository, catalogues it with an owner, and opens the one pull request
+that registers it for deployment. The shared platform components will be built
+incrementally across [eight phases](docs/roadmap.md).
 This is a production-oriented development foundation, not a production deployment.
 
 ```mermaid
 flowchart TD
-  Developer --> Backstage[Backstage portal: Phase 4]
-  Backstage --> Template[Service template: Phase 4]
+  Developer --> Backstage[Backstage portal]
+  Backstage --> Template[Node.js service template]
   Template --> Repo[GitHub application repository]
+  Template --> Onboard[Onboarding pull request: registers the service]
+  Onboard --> Registry
   Repo --> CI[GitHub Actions: test, build, scan]
   CI --> Registry[Amazon ECR: publish by digest]
   Registry --> GitOps[Promotion pull request: gitops/]
@@ -41,7 +43,11 @@ platform-engineering-idp/
 │           ├── eks/             # Cluster, IAM access, logs, add-ons, managed workers
 │           └── ecr/             # Per-service image repositories and retention
 ├── platform/
-│   ├── helm/sample-service/     # Deployment and ClusterIP Service
+│   ├── backstage/
+│   │   ├── app-config.yaml     # Portal configuration; the app itself is generated
+│   │   ├── catalog/            # Groups, domain, system and infrastructure resources
+│   │   └── templates/          # Service template, its skeleton and onboarding change
+│   ├── helm/service/            # Shared chart: Deployment and ClusterIP Service
 │   ├── argocd/
 │   │   ├── install/            # Pinned Argo CD installation
 │   │   ├── applications/       # App-of-apps root and per-service Applications
@@ -58,12 +64,17 @@ platform-engineering-idp/
 └── README.md
 ```
 
+Each service also carries a `catalog-info.yaml` beside its code, so a catalog
+entity moves and dies with the code it describes instead of drifting in a central
+list.
+
 Application source, cloud resources, platform configuration and deployment state
-have separate ownership boundaries. A monorepo keeps the project inspectable in one
-clone; [`gitops/README.md`](gitops/README.md) explains why deployment state is a
-directory here rather than a second repository, and what splitting it would cost.
-Phase 4 templates will create per-service repositories. GitHub requires workflows in
-the root `.github/workflows` directory.
+have separate ownership boundaries, enforced by [`CODEOWNERS`](.github/CODEOWNERS)
+rather than by convention. A monorepo keeps the platform inspectable in one clone;
+[`gitops/README.md`](gitops/README.md) explains why deployment state is a directory
+here rather than a second repository. Services created through the portal get their
+own repositories and are not added here. GitHub requires workflows in the root
+`.github/workflows` directory.
 
 ## Run and test the API
 
@@ -128,8 +139,8 @@ is still outstanding. Dependabot proposes dependency updates.
 ## Inspect or deploy the Helm chart
 
 ```powershell
-helm lint --strict platform/helm/sample-service
-helm template sample platform/helm/sample-service --namespace idp-dev
+helm lint --strict platform/helm/service
+helm template sample-service platform/helm/service --namespace idp-dev
 ```
 
 For an existing **development** cluster, first make the image available to its
@@ -138,9 +149,9 @@ reachable registry and override `image.repository` and `image.tag`.
 
 ```powershell
 kubectl apply -f platform/kubernetes/namespace.yaml
-helm upgrade --install sample platform/helm/sample-service --namespace idp-dev --wait --timeout 180s
-kubectl rollout status deployment/sample-sample-service -n idp-dev
-kubectl port-forward -n idp-dev svc/sample-sample-service 8080:80
+helm upgrade --install sample-service platform/helm/service --namespace idp-dev --wait --timeout 180s
+kubectl rollout status deployment/sample-service -n idp-dev
+kubectl port-forward -n idp-dev svc/sample-service 8080:80
 ```
 
 The chart default is the local `sample-service:0.1.0`. `values-dev.yaml` now carries
@@ -167,8 +178,11 @@ to v1.35, matching EKS. For older local clusters, set that label to their versio
 A ClusterIP Service keeps this unauthenticated sample internal. TLS, ingress,
 network policy, disruption budgets and autoscaling arrive once their controllers
 and operational requirements are established. Replica count alone is not an SLA.
-Generated Kubernetes resource names include both release and chart names to allow
-multiple installations; the `sample` release creates `sample-sample-service`.
+One chart, named `service`, is shared by every service on the platform, so
+resource names come from the release rather than the chart: the `sample-service`
+release creates a Deployment and Service both named `sample-service`. That name is
+also the catalog entity, the ECR repository and the Kubernetes label the portal
+selects on, which is what lets one identifier follow a service end to end.
 
 ## Terraform foundation
 
@@ -270,6 +284,15 @@ keeps twenty tagged images, bounding storage cost while leaving rollback targets
 `force_delete` is off, so destroying a repository that still holds images requires a
 conscious decision rather than silently deleting published artefacts.
 
+The repositories that exist are **derived from `gitops/environments/dev`** rather
+than listed in a variable: a service exists on this platform exactly when it has
+deployment state. The bootstrap root reads the same directory to decide which
+GitHub repositories may publish images, which is what lets the portal onboard a
+service with one reviewed pull request instead of three edits a scaffolder cannot
+make. The consequence is that merging a file there creates AWS resources and grants
+publish rights, so `gitops/**` is owned in `CODEOWNERS` and reviewed as
+infrastructure.
+
 The registry is a separate module from the cluster because images outlive any single
 cluster; the environment can be destroyed and rebuilt without republishing.
 
@@ -312,8 +335,11 @@ Pull requests, pushes to `main`, and manual dispatch run three jobs:
    that keeps checkout credentials, and the only one that can write to the repository.
 
 The configuration job also asserts that a set digest reaches the rendered container
-image reference, and exercises the promotion script's digest validation. A promotion
-mechanism that silently rendered a tag would look identical in review.
+image reference, exercises the promotion script's digest validation, and runs
+`platform/scripts/check-platform.py`. A promotion mechanism that silently rendered a
+tag would look identical in review; so would a template whose skeleton ships its
+placeholders unrendered, or a service registered with no Argo CD Application to
+deploy it.
 
 A second workflow, `terraform.yaml`, handles infrastructure. Pull requests touching
 `infrastructure/terraform/**` get a plan posted as a comment; merging to `main` runs
@@ -378,26 +404,65 @@ The Argo CD server is not exposed; reach it with `kubectl -n argocd port-forward
 svc/argocd-server 8080:443`. That avoids paying for a load balancer and avoids
 publishing an admin interface during development.
 
+## Developer self-service
+
+A developer creates a service by filling in a form, not by copying a repository
+and editing five files. The [Phase 4 runbook](docs/phase-4-plan.md) has the full
+procedure; [`platform/backstage/README.md`](platform/backstage/README.md) covers
+running the portal.
+
+**The form collects five things** — name, description, owner, system and lifecycle.
+Everything else is derived from the name, because the repository, the catalog
+entity, the Kubernetes release, the ECR repository and the OIDC trust subject are
+all the same identifier. Letting them differ would mean five names for one service.
+
+**Ownership is a group, never a person.** The owner picker offers Groups only: a
+service owned by an individual becomes unowned the day they change team.
+
+**The template produces two things.** A repository containing the service, its
+tests, a hardened container build and the same pipeline this repository runs; and
+a pull request against this repository containing exactly two files — deployment
+state and an Argo CD Application.
+
+**That pull request is reviewed rather than pushed.** Merging it is what creates
+the service's ECR repository *and* grants its GitHub repository permission to
+publish images, both derived from the deployment state file. The scaffolder holds
+a token that could push directly; it opens a pull request instead, because a
+portal that can grant itself AWS access has moved the trust boundary.
+
+**The skeleton is checked, not just stored.** `platform/scripts/check-platform.py`
+runs in CI and fails on a catalog entity owned by a non-existent group, a template
+that passes a value it never declares, a skeleton file that would ship its
+placeholders unrendered, YAML that stops being YAML once rendered, and a registered
+service with no Application to deploy it.
+
+What is not built: the portal is not hosted in the cluster, identity is a
+placeholder rather than GitHub organisation ingestion, and the permission framework
+is off. Each is deliberate and explained in the runbook.
+
 ## Validation and next work
 
 See [local verification](docs/validation.md), the [Phase 1 plan](docs/phase-1-plan.md),
 the [Phase 2 runbook](docs/phase-2-plan.md), the [Phase 3 runbook](docs/phase-3-plan.md),
-the [teardown runbook](docs/teardown.md) and the
-[phase acceptance criteria](docs/roadmap.md).
+the [Phase 4 runbook](docs/phase-4-plan.md), the [teardown runbook](docs/teardown.md)
+and the [phase acceptance criteria](docs/roadmap.md).
 
-Phase 2 and Phase 3 configuration is written and validates locally, but **nothing has
-been applied to AWS and no image has been published**. The state bucket, roles,
+Phase 2, 3 and 4 configuration is written and validates locally, but **nothing has
+been applied to AWS, no image has been published, and the portal has never been
+started**. The state bucket, roles,
 registry, add-ons and spot node group are unverified against a real account until the
 bootstrap and dev roots are applied. Argo CD's installation renders correctly and the
 chart renders a promoted digest, but no cluster has reconciled it: rendering is not
-admission, and a Synced Application is not a proven rollout. Terraform validation
+admission, and a Synced Application is not a proven rollout. The catalog and template
+are checked for internal consistency, which is not the same as Backstage accepting
+them. Terraform validation
 checks configuration and provider schemas, not permissions, quotas, regional capacity
 or successful provisioning.
 
-The next milestone is Phase 4: a Backstage catalog and a service template that
-scaffolds a repository wired to this delivery path. Prometheus, Grafana,
-OpenTelemetry, External Secrets and Kyverno are intentionally roadmap items, not
-empty services.
+The next milestone is Phase 5: Prometheus, Grafana, an OpenTelemetry collector and
+a trace backend, so that a request through a scaffolded service is observable end to
+end. External Secrets and Kyverno are intentionally roadmap items, not empty
+services.
 
 ## References
 
@@ -410,3 +475,6 @@ empty services.
 - [Argo CD cluster bootstrapping](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/): the app-of-apps pattern.
 - [Configuring OpenID Connect in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws): subject claims and trust policy conditions.
 - [Anchore scan action](https://github.com/anchore/scan-action): image scan inputs and severity gate.
+- [Backstage software templates](https://backstage.io/docs/features/software-templates/): template syntax, parameters and steps.
+- [Backstage built-in scaffolder actions](https://backstage.io/docs/features/software-templates/builtin-actions/): `fetch:template`, `publish:github` and `publish:github:pull-request` inputs.
+- [Backstage descriptor format](https://backstage.io/docs/features/software-catalog/descriptor-format/): entity kinds, required fields and well-known annotations.

@@ -1,0 +1,120 @@
+# Platform-owned Backstage configuration.
+#
+# This is not a whole Backstage app. The app itself is generated once with
+# `npx @backstage/create-app` and lives in its own repository, because a
+# generated Node monorepo is not reviewable and would bury this project's own
+# code. What belongs to the platform is the configuration below and the catalog
+# and template files beside it; the app reads them and owns nothing itself.
+#
+# Merge this over the generated app-config.yaml:
+#   yarn start --config ../path/to/app-config.yaml --config app-config.local.yaml
+#
+# Every value that could identify or authenticate is read from the environment.
+# Nothing here is a secret, so this file is safe to commit and to review.
+
+app:
+  title: Internal Developer Platform
+  baseUrl: ${APP_BASE_URL}
+
+organization:
+  name: ${ORG_NAME}
+
+backend:
+  baseUrl: ${BACKEND_BASE_URL}
+  listen:
+    port: 7007
+  csp:
+    # Backstage's default policy plus nothing. Widening this is a decision, not a
+    # convenience, so it is stated explicitly rather than inherited silently.
+    connect-src: ["'self'", 'http:', 'https:']
+  cors:
+    origin: ${APP_BASE_URL}
+    methods: [GET, HEAD, PATCH, POST, PUT, DELETE]
+    credentials: true
+  database:
+    # SQLite is fine for a local portal and wrong for a shared one: it cannot be
+    # shared between replicas and it disappears with the pod. A hosted portal uses
+    # Postgres, whose credentials arrive through External Secrets in Phase 6.
+    client: better-sqlite3
+    connection: ':memory:'
+
+integrations:
+  github:
+    - host: github.com
+      # A GitHub App is preferred over a personal token: it is scoped to chosen
+      # repositories, its installation token is short lived, and it does not stop
+      # working when a person leaves. A PAT works for a local trial.
+      token: ${GITHUB_TOKEN}
+
+auth:
+  environment: development
+  providers:
+    github:
+      development:
+        clientId: ${AUTH_GITHUB_CLIENT_ID}
+        clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+        signIn:
+          resolvers:
+            - resolver: usernameMatchingUserEntityName
+
+catalog:
+  # Only these kinds may be created by pointing the catalog at a file. Without a
+  # rule an unreviewed catalog-info.yaml in any repository could register itself
+  # as a Group and change who owns what.
+  rules:
+    - allow: [Component, System, Domain, Resource, API, Location, Template, Group, User]
+
+  locations:
+    # Ownership and the platform's own entities.
+    - type: url
+      target: https://github.com/OWNER/platform-engineering-idp/blob/main/platform/backstage/catalog/org.yaml
+      rules:
+        - allow: [Group, User]
+    - type: url
+      target: https://github.com/OWNER/platform-engineering-idp/blob/main/platform/backstage/catalog/systems.yaml
+    - type: url
+      target: https://github.com/OWNER/platform-engineering-idp/blob/main/apps/sample-service/catalog-info.yaml
+    # The template that creates new services.
+    - type: url
+      target: https://github.com/OWNER/platform-engineering-idp/blob/main/platform/backstage/templates/node-service/template.yaml
+      rules:
+        - allow: [Template]
+
+  # Scaffolded repositories register themselves through catalog:register, so they
+  # do not need to be listed above. Discovery by organisation scan is the
+  # alternative; it is left off so that entering the catalog stays a deliberate act.
+
+scaffolder:
+  defaultAuthor:
+    name: Internal Developer Platform
+    email: ${SCAFFOLDER_AUTHOR_EMAIL}
+  defaultCommitMessage: 'Initial commit from the IDP service template'
+
+kubernetes:
+  serviceLocatorMethod:
+    type: multiTenant
+  clusterLocatorMethods:
+    - type: config
+      clusters:
+        - name: idp-dev
+          url: ${K8S_CLUSTER_URL}
+          # The portal reads the cluster with an AWS identity rather than a stored
+          # bearer token, so access follows the same EKS access entries as kubectl.
+          authProvider: aws
+          skipTLSVerify: false
+  customResources: []
+
+# Requires the Argo CD backend plugin. Read-only credentials are enough: the
+# portal reports sync and health, and deployments still happen only through Git.
+argocd:
+  appLocatorMethods:
+    - type: config
+      instances:
+        - name: idp-dev
+          url: ${ARGOCD_URL}
+          token: ${ARGOCD_AUTH_TOKEN}
+
+permission:
+  # Off until identity is real. Turning it on before GitHub organisation ingestion
+  # would enforce rules against a catalog that has one placeholder user in it.
+  enabled: false

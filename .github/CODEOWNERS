@@ -1,0 +1,18 @@
+# Replace @OWNER with the GitHub team that operates the platform (for example
+# @your-org/platform-engineering) before enabling "Require review from Code
+# Owners" on main.
+#
+# The paths below are the ones where a merge grants something. Merging a file
+# into gitops/ registers a service, which creates an ECR repository and trusts a
+# repository of that name to publish images into it. That is an infrastructure
+# change wearing a one-file disguise, so it is owned like one.
+
+*                                   @OWNER
+
+/gitops/                            @OWNER
+/infrastructure/                    @OWNER
+/platform/argocd/                   @OWNER
+/platform/helm/                     @OWNER
+/platform/scripts/                  @OWNER
+/platform/backstage/catalog/org.yaml @OWNER
+/.github/                           @OWNER

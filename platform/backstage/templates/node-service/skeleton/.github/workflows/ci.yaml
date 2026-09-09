@@ -1,0 +1,220 @@
+name: CI
+# Created from the platform's Node.js service template. It is the same pipeline
+# the platform repository runs: test, build, smoke test, scan, publish by digest,
+# then propose the digest for deployment.
+#
+# This file is not templated by the scaffolder, so it contains no service name.
+# Everything it needs it derives from the repository it runs in.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Matches the ECR repositories Terraform derives from gitops/environments/dev.
+  ECR_NAMESPACE: idp-dev
+  PLATFORM_REPO: platform-engineering-idp
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm audit --audit-level=high
+
+  container:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write   # Requested only by the publish steps on main.
+    outputs:
+      repository: ${{ steps.push.outputs.repository }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build --pull --tag "service:${GITHUB_SHA}" .
+
+      - name: Smoke test the hardened container
+        run: |
+          set -euo pipefail
+          docker run -d --name probe --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --memory=128m --cpus=0.5 \
+            -p 127.0.0.1:8080:8080 "service:${GITHUB_SHA}"
+          trap 'docker logs probe; docker rm -f probe' EXIT
+          curl --fail --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:8080/readyz
+          curl --fail http://127.0.0.1:8080/healthz
+          docker stop --time 15 probe
+          test "$(docker inspect --format='{{.State.ExitCode}}' probe)" = '0'
+
+      - name: Scan image packages with Grype
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: service:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: table
+
+      # Publishing runs only for a merge to main, and only once the platform team
+      # has set AWS_REGION. Until then the pipeline tests and scans without
+      # needing any cloud access at all.
+      - name: Assume the image publish role
+        id: aws
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_REGION != '' }}
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ secrets.AWS_IMAGE_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: image-publish-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        if: steps.aws.outcome == 'success'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Push the image and record its digest
+        id: push
+        if: steps.ecr.outcome == 'success'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          service="${GITHUB_REPOSITORY#*/}"
+          repository="${ECR_NAMESPACE}/${service}"
+          target="${REGISTRY}/${repository}"
+          # Tags are immutable, so a re-run of an already published commit must
+          # reuse its digest rather than fail against the existing tag.
+          published=$(aws ecr describe-images \
+            --repository-name "${repository}" \
+            --image-ids imageTag="${GITHUB_SHA}" \
+            --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+          if [ -n "${published}" ] && [ "${published}" != 'None' ]; then
+            echo "Tag ${GITHUB_SHA} is already published as ${published}."
+            digest="${published}"
+          else
+            docker tag "service:${GITHUB_SHA}" "${target}:${GITHUB_SHA}"
+            docker push "${target}:${GITHUB_SHA}"
+            digest=$(docker image inspect "${target}:${GITHUB_SHA}" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | grep "^${target}@" | head -n 1 | cut -d@ -f2)
+          fi
+          test -n "${digest}"
+          echo "repository=${target}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Published \`${target}@${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # Deployment state lives in the platform repository, so promotion is a pull
+  # request against that repository rather than this one. It needs a token that
+  # can write there; without it the pipeline still publishes, and the digest is
+  # printed for a person to promote by hand.
+  promote:
+    needs: container
+    if: needs.container.outputs.digest != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      HAS_PLATFORM_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN != '' }}
+    steps:
+      - name: Explain how to promote by hand
+        if: env.HAS_PLATFORM_TOKEN != 'true'
+        env:
+          IMAGE_REPOSITORY: ${{ needs.container.outputs.repository }}
+          IMAGE_DIGEST: ${{ needs.container.outputs.digest }}
+        run: |
+          service="${GITHUB_REPOSITORY#*/}"
+          {
+            echo '### Promotion skipped'
+            echo
+            echo 'No PLATFORM_REPO_TOKEN is configured, so this pipeline cannot open'
+            echo 'a pull request against the platform repository. Promote by running'
+            echo 'this there:'
+            echo
+            echo '```bash'
+            echo "platform/scripts/promote-image.sh \\"
+            echo "  --file gitops/environments/dev/${service}.yaml \\"
+            echo "  --repository ${IMAGE_REPOSITORY} \\"
+            echo "  --tag ${GITHUB_SHA} \\"
+            echo "  --digest ${IMAGE_DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out the platform repository
+        if: env.HAS_PLATFORM_TOKEN == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ github.repository_owner }}/platform-engineering-idp
+          token: ${{ secrets.PLATFORM_REPO_TOKEN }}
+          path: platform-repo
+          persist-credentials: true
+
+      - name: Open the promotion pull request
+        if: env.HAS_PLATFORM_TOKEN == 'true'
+        working-directory: platform-repo
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}
+          IMAGE_REPOSITORY: ${{ needs.container.outputs.repository }}
+          IMAGE_DIGEST: ${{ needs.container.outputs.digest }}
+        run: |
+          set -euo pipefail
+          service="${GITHUB_REPOSITORY#*/}"
+          state="gitops/environments/dev/${service}.yaml"
+          if [ ! -f "${state}" ]; then
+            echo "No deployment state at ${state}." >&2
+            echo 'Merge the onboarding pull request created by the template first.' >&2
+            exit 1
+          fi
+          platform/scripts/promote-image.sh \
+            --file "${state}" \
+            --repository "${IMAGE_REPOSITORY}" \
+            --tag "${GITHUB_SHA}" \
+            --digest "${IMAGE_DIGEST}"
+          if git diff --quiet -- "${state}"; then
+            echo 'Deployment state already names this digest; nothing to promote.'
+            exit 0
+          fi
+          short="${GITHUB_SHA:0:12}"
+          branch="promote/${service}-${short}"
+          title="Promote ${service} ${short} to dev"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "${branch}"
+          git add "${state}"
+          git commit -m "${title}"
+          git push --force-with-lease origin "${branch}"
+          cat > "${RUNNER_TEMP}/pr-body.md" <<EOF
+          Automated promotion from \`${GITHUB_REPOSITORY}\` at \`${GITHUB_SHA}\`.
+
+          - Digest: \`${IMAGE_DIGEST}\`
+          - Deployment state: \`${state}\`
+
+          Merging this deploys it. Reverting the merge rolls it back.
+          EOF
+          gh pr create --repo "${GITHUB_REPOSITORY_OWNER}/${PLATFORM_REPO}" \
+            --base main --head "${branch}" \
+            --title "${title}" --body-file "${RUNNER_TEMP}/pr-body.md" \
+            || gh pr edit "${branch}" --repo "${GITHUB_REPOSITORY_OWNER}/${PLATFORM_REPO}" \
+              --title "${title}" --body-file "${RUNNER_TEMP}/pr-body.md"

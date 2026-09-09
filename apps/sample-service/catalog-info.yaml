@@ -1,0 +1,31 @@
+# The reference service, catalogued the same way a scaffolded one is. The
+# template's skeleton produces a file of this shape, so whatever is wrong here is
+# wrong for every service the portal creates.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: sample-service
+  title: Sample Service
+  description: Reference stateless HTTP API demonstrating the platform's delivery path.
+  annotations:
+    # Ties the entity to its code, so the portal can show commits and open the repo.
+    github.com/project-slug: OWNER/platform-engineering-idp
+    backstage.io/source-location: url:https://github.com/OWNER/platform-engineering-idp/tree/main/apps/sample-service/
+    # Read by the Kubernetes plugin. The chart stamps this label onto every object,
+    # so what the portal shows is what the cluster actually runs.
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/name=sample-service
+    # Read by the Argo CD plugin to show sync and health beside the entity.
+    argocd/app-name: sample-service-dev
+  tags:
+    - node
+    - http
+  links:
+    - url: https://github.com/OWNER/platform-engineering-idp/blob/main/gitops/environments/dev/sample-service.yaml
+      title: Deployed image digest
+      icon: docs
+spec:
+  type: service
+  lifecycle: experimental
+  owner: platform-engineering
+  system: idp-dev
+  providesApis: []

@@ -1,0 +1,10 @@
+# Deployment state for ${{ values.name }} in dev. Rewritten by the promotion job
+# in the service's own repository; edit by hand only to force a specific image.
+#
+# This file is also the platform's service registry. Terraform derives the ECR
+# repository and the image-publishing trust subject from the files in this
+# directory, so adding this file is what makes the service deployable at all.
+image:
+  repository: PENDING_FIRST_PROMOTION
+  tag: "PENDING_FIRST_PROMOTION"
+  digest: ""

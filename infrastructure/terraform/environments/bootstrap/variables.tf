@@ -59,3 +59,9 @@ variable "image_repository_prefix" {
   type        = string
   default     = "idp-"
 }
+
+variable "platform_owned_services" {
+  description = "Registered services whose code lives in the platform repository, so no separate repository is trusted to publish their images."
+  type        = list(string)
+  default     = ["sample-service"]
+}

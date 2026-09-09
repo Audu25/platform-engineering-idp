@@ -1,0 +1,185 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: node-service
+  title: Node.js HTTP service
+  description: |
+    Creates a repository containing a health-checked Node.js service, its tests,
+    a hardened container build and a CI pipeline, then opens a pull request
+    against the platform repository that registers it for deployment.
+  tags:
+    - node
+    - service
+    - recommended
+  annotations:
+    backstage.io/source-location: url:https://github.com/OWNER/platform-engineering-idp/tree/main/platform/backstage/templates/node-service/
+spec:
+  owner: platform-engineering
+  type: service
+
+  parameters:
+    - title: Identify the service
+      required: [name, description, owner]
+      properties:
+        name:
+          title: Name
+          type: string
+          description: |
+            Lowercase, hyphen-separated. Becomes the repository name, the catalog
+            entity, the Kubernetes release and the ECR repository, so it cannot be
+            changed later without recreating all four.
+          # Also the DNS label a Service is addressed by, hence the 40-character
+          # bound and the letter-first rule.
+          pattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$'
+          ui:autofocus: true
+          ui:help: 'e.g. payments-api. Letters, digits and hyphens; must start with a letter.'
+        description:
+          title: Description
+          type: string
+          description: One sentence describing what this service does. Shown in the catalog.
+          maxLength: 200
+        owner:
+          title: Owner
+          type: string
+          description: The team accountable for this service. Individuals are not offered.
+          ui:field: OwnerPicker
+          ui:options:
+            catalogFilter:
+              kind: Group
+        system:
+          title: System
+          type: string
+          description: The system this service belongs to.
+          default: idp-dev
+          ui:field: EntityPicker
+          ui:options:
+            catalogFilter:
+              kind: System
+            allowArbitraryValues: false
+        lifecycle:
+          title: Lifecycle
+          type: string
+          default: experimental
+          enum: [experimental, production, deprecated]
+          description: |
+            Sets expectations before anyone depends on it. Start at experimental;
+            production is a claim about support, not about whether it is deployed.
+
+    - title: Choose where the code lives
+      required: [githubOwner]
+      properties:
+        githubOwner:
+          title: GitHub owner
+          type: string
+          description: |
+            The account or organisation that will own the new repository. The
+            repository is always named after the service, because the delivery
+            path derives the image repository and the OIDC trust subject from
+            that name.
+          default: OWNER
+
+  steps:
+    # 1. The service repository's contents.
+    - id: render
+      name: Render the service
+      action: fetch:template
+      input:
+        url: ./skeleton
+        targetPath: ./service
+        # Only .njk files are rendered, and the extension is dropped. Without
+        # this, the scaffolder would try to evaluate every ${{ }} in the GitHub
+        # Actions workflow as a template variable and fail.
+        templateFileExtension: true
+        values:
+          name: ${{ parameters.name }}
+          description: ${{ parameters.description }}
+          owner: ${{ parameters.owner }}
+          system: ${{ parameters.system }}
+          lifecycle: ${{ parameters.lifecycle }}
+          githubOwner: ${{ parameters.githubOwner }}
+
+    - id: publish
+      name: Create the repository
+      action: publish:github
+      input:
+        repoUrl: github.com?owner=${{ parameters.githubOwner }}&repo=${{ parameters.name }}
+        sourcePath: ./service
+        description: ${{ parameters.description }}
+        defaultBranch: main
+        repoVisibility: private
+        # The delivery path assumes main is reviewed: merging is what deploys.
+        protectDefaultBranch: true
+        requireCodeOwnerReviews: false
+        deleteBranchOnMerge: true
+        allowMergeCommit: false
+        allowRebaseMerge: false
+        allowSquashMerge: true
+        collaborators:
+          - team: ${{ parameters.owner | parseEntityRef | pick('name') }}
+            access: admin
+
+    # 2. The platform-side registration. This is a pull request rather than a
+    #    direct push: adding deployment state grants the new repository the right
+    #    to publish images, which is a change the platform team reviews.
+    - id: renderPlatform
+      name: Render the platform registration
+      action: fetch:template
+      input:
+        url: ./platform-change
+        targetPath: ./platform-change
+        values:
+          name: ${{ parameters.name }}
+          description: ${{ parameters.description }}
+          githubOwner: ${{ parameters.githubOwner }}
+
+    - id: registerForDelivery
+      name: Open the platform pull request
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?owner=${{ parameters.githubOwner }}&repo=platform-engineering-idp
+        branchName: onboard-${{ parameters.name }}
+        title: 'Onboard ${{ parameters.name }} to idp-dev'
+        sourcePath: ./platform-change
+        description: |
+          Registers `${{ parameters.name }}` for deployment, created by the
+          Node.js HTTP service template.
+
+          Merging this adds three things at once, all derived from the deployment
+          state file:
+
+          - an ECR repository, from the `fileset` over `gitops/environments/dev`
+          - permission for `${{ parameters.githubOwner }}/${{ parameters.name }}`
+            to push images to it, from the same fileset in the bootstrap root
+          - an Argo CD Application that deploys it into `idp-dev`
+
+          Nothing deploys yet: the state file names `PENDING_FIRST_PROMOTION`
+          until the service's own pipeline publishes an image and opens a
+          promotion pull request.
+
+          Review that the repository name matches the file name before merging.
+
+    # 3. Only now does the entity exist, so registration comes last.
+    - id: register
+      name: Register in the catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
+
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps.publish.output.remoteUrl }}
+      - title: Platform pull request (merge this to enable deployment)
+        url: ${{ steps.registerForDelivery.output.remoteUrl }}
+      - title: Open in catalog
+        icon: catalog
+        entityRef: ${{ steps.register.output.entityRef }}
+    text:
+      - title: Next steps
+        content: |
+          1. Ask the platform team to review and merge the pull request above.
+          2. Merge anything to your new repository's `main`. CI builds, scans and
+             publishes the image, then opens a promotion pull request.
+          3. Merge the promotion. Argo CD deploys it, and reverting that merge
+             rolls it back.

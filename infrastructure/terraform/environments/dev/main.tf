@@ -25,6 +25,6 @@ module "eks" {
 # single cluster, and Phase 3 publishes to it before Argo CD consumes it.
 module "ecr" {
   source           = "../../modules/ecr"
-  repository_names = var.service_names
+  repository_names = local.service_names
   namespace        = var.cluster_name
 }

@@ -1,0 +1,56 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createApp } from '../src/app.js';
+
+async function fixture(t) {
+  const logs = [];
+  const app = createApp({ logger: (line) => logs.push(JSON.parse(line)) });
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  t.after(() => new Promise((resolve) => {
+    app.server.close(resolve);
+    app.server.closeAllConnections();
+  }));
+  return { ...app, logs, url: `http://127.0.0.1:${app.server.address().port}` };
+}
+
+test('API returns service identity and JSON', async (t) => {
+  const { url } = await fixture(t);
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /application\/json/);
+  assert.equal((await response.json()).service, '${{ values.name }}');
+});
+
+test('readiness fails during drain while liveness stays healthy', async (t) => {
+  const { url, setReady } = await fixture(t);
+  assert.equal((await fetch(`${url}/readyz`)).status, 200);
+  setReady(false);
+  assert.equal((await fetch(`${url}/readyz`)).status, 503);
+  assert.equal((await fetch(`${url}/healthz`)).status, 200);
+});
+
+test('unknown routes and unsupported methods are rejected', async (t) => {
+  const { url } = await fixture(t);
+  assert.equal((await fetch(`${url}/missing`)).status, 404);
+  const response = await fetch(url, { method: 'POST' });
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get('allow'), 'GET, HEAD');
+});
+
+test('HEAD responses have no body', async (t) => {
+  const { url } = await fixture(t);
+  const response = await fetch(`${url}/healthz`, { method: 'HEAD' });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '');
+});
+
+test('request logs omit query strings and credentials', async (t) => {
+  const { url, logs } = await fixture(t);
+  await fetch(`${url}/?token=secret`, { headers: { authorization: 'Bearer secret' } });
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].status, 200);
+  assert.equal(logs[0].path, '/');
+  assert.ok(!JSON.stringify(logs).includes('secret'));
+});

@@ -5,6 +5,11 @@
 # Only a run on the default branch may publish. Pull requests build and scan the
 # same image but never obtain these credentials, so a fork or an unmerged branch
 # cannot place an artifact in the registry that Argo CD would later deploy.
+#
+# Subjects are matched exactly, one per trusted repository, rather than with a
+# wildcard over the organisation: a naming convention is a convention, and it
+# should not be the thing standing between an arbitrary new repository and the
+# platform's registry.
 data "aws_iam_policy_document" "image_publish_assume" {
   statement {
     effect  = "Allow"
@@ -21,7 +26,7 @@ data "aws_iam_policy_document" "image_publish_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${local.repo}:ref:refs/heads/main"]
+      values   = local.publish_subjects
     }
   }
 }

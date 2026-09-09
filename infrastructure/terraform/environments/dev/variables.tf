@@ -87,9 +87,9 @@ variable "max_size" {
 }
 
 variable "service_names" {
-  description = "Services that receive an image repository."
+  description = "Override the services that receive an image repository. Empty derives them from gitops/environments/dev, which is the normal case."
   type        = list(string)
-  default     = ["sample-service"]
+  default     = []
 }
 
 variable "owner" {

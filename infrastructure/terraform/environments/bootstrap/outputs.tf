@@ -33,3 +33,8 @@ output "image_publish_role_arn" {
   description = "Role ARN for the CI image publish job; store as the AWS_IMAGE_PUBLISH_ROLE_ARN secret."
   value       = aws_iam_role.image_publish.arn
 }
+
+output "image_publish_subjects" {
+  description = "OIDC subjects trusted to publish images. Review this after onboarding a service."
+  value       = local.publish_subjects
+}

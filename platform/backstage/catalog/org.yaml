@@ -1,0 +1,43 @@
+# Ownership. Every Component must name an owner that exists here, which is what
+# turns "who do I ask about this service" into a lookup rather than a guess.
+#
+# Groups are the owning unit, never individual users: a service owned by a person
+# becomes unowned the day they change team. Users belong to groups; groups own
+# things.
+---
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: platform-engineering
+  title: Platform Engineering
+  description: Owns the delivery path, the shared chart, the cluster and this catalog.
+spec:
+  type: team
+  profile:
+    displayName: Platform Engineering
+  children: []
+---
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: application-developers
+  title: Application Developers
+  description: Owns services created through the portal. The default owner offered by the template.
+spec:
+  type: team
+  profile:
+    displayName: Application Developers
+  children: []
+---
+# The catalog is normally populated from an identity provider. This static entry
+# exists so ownership resolves before GitHub organisation ingestion is configured;
+# replace it with the org provider rather than growing this file by hand.
+apiVersion: backstage.io/v1alpha1
+kind: User
+metadata:
+  name: platform-admin
+  title: Platform Administrator
+  description: Placeholder identity until GitHub organisation ingestion is enabled.
+spec:
+  memberOf:
+    - platform-engineering

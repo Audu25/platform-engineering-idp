@@ -18,9 +18,9 @@ spec:
       ref: values
     - repoURL: https://github.com/OWNER/platform-engineering-idp.git
       targetRevision: main
-      path: platform/helm/sample-service
+      path: platform/helm/service
       helm:
-        releaseName: sample
+        releaseName: sample-service
         # The chart's own values.yaml is always the base; these layer over it.
         valueFiles:
           - values-dev.yaml

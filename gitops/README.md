@@ -5,9 +5,14 @@ records **how it is deployed**. CI writes only into this directory, so a
 promotion commit can never alter the chart, the probes or the security context
 it is deploying under.
 
-Argo CD watches this path and `platform/helm/sample-service` as two sources of
+Argo CD watches this path and `platform/helm/service` as two sources of
 one Application. The chart supplies structure and defaults; the file here
 supplies the image digest layered on top.
+
+This directory is also the platform's service registry. Terraform enumerates
+the files here to decide which ECR repositories exist and which GitHub
+repositories may publish images into them, so adding a file is what makes a
+service deployable at all — and is an infrastructure change, reviewed as one.
 
 A conventional GitOps setup puts this directory in its own repository so that
 application code and deployment state have independent histories and access

@@ -87,7 +87,7 @@ Phase 2 or Phase 3 has been applied to AWS.**
 
 | Check | Result |
 | --- | --- |
-| `helm lint --strict platform/helm/sample-service` | Passed on Helm 3.19.0 after the digest change |
+| `helm lint --strict platform/helm/service` | Passed on Helm 3.19.0 after the digest change |
 | `helm lint --strict ... --values values-dev.yaml` | Passed with the environment overlay |
 | Render with `image.digest` set | Produced `example.com/sample-service@sha256:0000...`; the digest reaches the container image reference |
 | Render with no digest | Fell back to `sample-service:0.1.0`, so the tag path still works |
@@ -124,3 +124,62 @@ real cluster and account:
 The acceptance criteria for this phase (a merge builds and scans an image, an
 approved Git change deploys it, reverting rolls it back) are therefore **not yet
 met**. Every mechanism exists and validates; none has been observed end to end.
+
+## Phase 4
+
+Verified locally on 2026-09-09. This records configuration, rendering and
+consistency checks only. **The Backstage portal has never been started, no
+service has been scaffolded, and nothing has been applied to AWS.**
+
+| Check | Result |
+| --- | --- |
+| `helm lint --strict platform/helm/service` | Passed after renaming the chart from `sample-service` and moving names onto the release |
+| `helm lint --strict ... --values values-dev.yaml` | Passed |
+| Render the shared chart | Deployment and Service both named `sample-service`, selectors matching, `app.kubernetes.io/part-of` stamped for catalog correlation |
+| Render with `image.digest` set | Digest still reaches the container image reference after the chart rename |
+| `check-platform.py` on the repository | Passed: 8 catalog entities, 2 groups, 1 registered service, 2 Argo CD applications |
+| `check-platform.py` negative: owner not a Group | Caught `Component:sample-service` owned by a non-existent group |
+| `check-platform.py` negative: skeleton file not named `.njk` | Caught `src/app.js` as shipping unrendered placeholders |
+| `check-platform.py` negative: registered service with no Application | Caught an orphaned `gitops/environments/dev/orphan.yaml` |
+| `check-platform.py` negative: broken YAML in a `.njk` skeleton file | Caught as invalid YAML once rendered |
+| `check-platform.py` negative: broken YAML in the onboarding change | Caught as invalid YAML once rendered |
+| First run of `check-platform.py` against the real catalog | Found a genuine modelling error: a `delivery-path` Component that no cluster object backs. Removed rather than special-cased |
+| Registry derivation, `terraform console` (bootstrap) | `gitops/environments/dev` resolved to `["sample-service"]`; `publish_subjects` contained only the platform repository |
+| Registry derivation, simulated onboarding | Adding `payments-api.yaml` produced `repo:OWNER/payments-api:ref:refs/heads/main` in the trust subjects and removing it reverted them |
+| `platform_owned_services` exclusion | `sample-service` produced no trust subject, so no repository of that name could claim its credentials |
+| `terraform fmt -check -recursive` | Passed with the new `services.tf` in both roots |
+| `terraform validate` (dev, bootstrap) | Both passed on Terraform 1.14.5 |
+| YAML parse of every non-template manifest | 22 files parsed, 0 failures |
+| Backstage package versions | `@backstage/create-app` 0.9.1 and `@backstage/cli` 0.36.5 resolved through the npm registry, not from memory |
+
+### Phase 4: not verified
+
+A catalog that is internally consistent is not a catalog Backstage has accepted.
+These remain unproven until the [Phase 4 runbook](phase-4-plan.md) is executed:
+
+- That Backstage parses `app-config.yaml`, that the plugins named in it exist under
+  those package names, and that the catalog locations resolve.
+- That the template appears in the portal, that its `OwnerPicker` and
+  `EntityPicker` resolve against the catalog, and that its parameter validation
+  behaves as intended.
+- That `fetch:template` with `templateFileExtension` renders exactly the `.njk`
+  files and copies the GitHub Actions workflow untouched. This is the assumption
+  the whole skeleton rests on and it has not been executed once.
+- That `publish:github` can create a repository with those branch protection
+  settings, and that `publish:github:pull-request` opens the onboarding pull
+  request against the platform repository.
+- That the scaffolded pipeline runs green in a fresh repository, including
+  `npm ci` against the generated lockfile.
+- That the cross-repository promotion works, and that the skip path prints
+  correctly when `PLATFORM_REPO_TOKEN` is absent.
+- That Terraform actually creates a repository and a trust subject for a newly
+  onboarded service, which requires an apply.
+
+The acceptance criterion for this phase — a developer creates a service through
+the portal and receives a working repository and deployment — is therefore **not
+yet met**. Every part exists and validates; none has been run end to end.
+
+Note that the Phase 1 and Phase 2 rows above reference `platform/helm/sample-service`.
+That path was correct when those checks ran; the chart moved to
+`platform/helm/service` in Phase 4. The rows are left as recorded rather than
+rewritten.

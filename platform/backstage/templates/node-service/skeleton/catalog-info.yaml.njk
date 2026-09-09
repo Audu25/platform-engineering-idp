@@ -1,0 +1,24 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name }}
+  description: ${{ values.description }}
+  annotations:
+    github.com/project-slug: ${{ values.githubOwner }}/${{ values.name }}
+    backstage.io/source-location: url:https://github.com/${{ values.githubOwner }}/${{ values.name }}/tree/main/
+    # The shared chart stamps this label onto every object it creates, so the
+    # portal shows what the cluster actually runs rather than what was intended.
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/name=${{ values.name }}
+    argocd/app-name: ${{ values.name }}-dev
+  tags:
+    - node
+    - http
+  links:
+    - url: https://github.com/${{ values.githubOwner }}/platform-engineering-idp/blob/main/gitops/environments/dev/${{ values.name }}.yaml
+      title: Deployed image digest
+      icon: docs
+spec:
+  type: service
+  lifecycle: ${{ values.lifecycle }}
+  owner: ${{ values.owner }}
+  system: ${{ values.system }}

@@ -1,3 +1,8 @@
+# Resource names follow the release name; set this only to override it.
+nameOverride: ""
+# Catalog system this service belongs to, surfaced as app.kubernetes.io/part-of
+# so cluster objects can be traced back to a Backstage entity.
+partOf: idp
 replicaCount: 2
 image:
   repository: sample-service

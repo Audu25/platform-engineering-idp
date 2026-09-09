@@ -138,7 +138,7 @@ the real mechanism.
 | An approved Git change deploys it | Merging the promotion pull request produces a Synced/Healthy Application running that digest |
 | Reverting the change rolls it back | After `git revert`, pods run the previous digest without operator action |
 
-Self-heal is demonstrated separately: `kubectl -n idp-dev scale deploy/sample-sample-service --replicas=5`
+Self-heal is demonstrated separately: `kubectl -n idp-dev scale deploy/sample-service --replicas=5`
 should be reverted by the controller, because the cluster is not the source of
 truth.
 

@@ -48,9 +48,9 @@ jobs:
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
         with:
           version: v3.19.0
-      - run: helm lint --strict platform/helm/sample-service
-      - run: helm lint --strict platform/helm/sample-service --values platform/helm/sample-service/values-dev.yaml
-      - run: helm template sample platform/helm/sample-service --namespace idp-dev > /tmp/sample-service.yaml
+      - run: helm lint --strict platform/helm/service
+      - run: helm lint --strict platform/helm/service --values platform/helm/service/values-dev.yaml
+      - run: helm template sample-service platform/helm/service --namespace idp-dev > /tmp/sample-service.yaml
 
       # A promoted digest has to reach the container image reference. If it
       # rendered as a tag, deployments would follow whatever that tag points at
@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           zeros=sha256:0000000000000000000000000000000000000000000000000000000000000000
-          rendered=$(helm template sample platform/helm/sample-service \
+          rendered=$(helm template sample-service platform/helm/service \
             --namespace idp-dev \
             --set image.repository=example.com/sample-service \
             --set image.tag=v1 \
@@ -85,6 +85,11 @@ jobs:
             echo 'A malformed digest was accepted.'; exit 1
           fi
           grep -q "digest: \"${digest}\"" "${scratch}/dev.yaml"
+
+      # Backstage reports a broken catalog or template at runtime, in a portal
+      # nobody has opened yet. These are the same problems, found from the files.
+      - name: Check the catalog, template and service registry
+        run: python3 platform/scripts/check-platform.py .
 
       - name: Render the Argo CD installation
         run: |

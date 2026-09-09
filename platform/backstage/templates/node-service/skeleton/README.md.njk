@@ -1,0 +1,46 @@
+# ${{ values.name }}
+
+${{ values.description }}
+
+Created from the Internal Developer Platform's Node.js service template. The
+delivery path, container hardening and Kubernetes contract come from the
+platform; what belongs to this repository is the code in `src/` and its tests.
+
+## Run it
+
+```bash
+npm install
+npm start          # http://127.0.0.1:8080
+npm test
+```
+
+| Route | Purpose |
+| --- | --- |
+| `/` | Service identity and version |
+| `/healthz` | Liveness. Never depends on a downstream, so one slow dependency cannot restart every pod |
+| `/readyz` | Readiness. Returns 503 while draining, so traffic stops before the socket closes |
+
+## How it ships
+
+1. Open a pull request. CI runs the tests, builds the container, smoke tests it
+   under the same restrictions Kubernetes applies, and scans it for high and
+   critical vulnerabilities.
+2. Merge it. The image is published to Amazon ECR and addressed by digest.
+3. A promotion pull request appears against the platform repository containing
+   the new digest. Merging that is what deploys; reverting it is what rolls back.
+
+Deployment state lives in the platform repository, not here, so a change to this
+repository cannot deploy itself.
+
+## What this repository does not contain
+
+The Helm chart, the Argo CD Application and the cluster configuration are owned
+by the platform team and shared by every service. To change how this service
+runs — replicas, resources, probes — open a pull request against the platform
+repository rather than adding a chart here.
+
+## Ownership
+
+Owned by `${{ values.owner }}`. Catalogued as
+[`${{ values.name }}`](https://github.com/${{ values.githubOwner }}/${{ values.name }}/blob/main/catalog-info.yaml)
+in the `${{ values.system }}` system.

@@ -25,3 +25,8 @@ output "kubeconfig_command" {
   description = "Command that grants kubectl access using the configured administrator role."
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }
+
+output "registered_services" {
+  description = "Services derived from gitops/environments/dev, each of which has an image repository."
+  value       = local.service_names
+}

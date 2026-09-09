@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "sample-service.name" . }}
+  name: {{ include "service.name" . }}
   labels:
-    {{- include "sample-service.labels" . | nindent 4 }}
+    {{- include "service.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -11,4 +11,4 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
   selector:
-    {{- include "sample-service.selectorLabels" . | nindent 4 }}
+    {{- include "service.selectorLabels" . | nindent 4 }}

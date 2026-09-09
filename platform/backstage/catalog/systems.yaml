@@ -1,0 +1,63 @@
+# The shape services are catalogued into. A Component that names a System it
+# belongs to, and a System that names the Resources it consumes, is what lets the
+# portal answer "what does this service depend on" without reading Terraform.
+---
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: internal-platform
+  title: Internal Platform
+  description: |
+    Everything the platform team runs so that application teams do not have to:
+    the cluster, the delivery path, the registry and the portal itself.
+spec:
+  owner: platform-engineering
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: idp-dev
+  title: IDP Development Environment
+  description: Services deployed to the idp-dev namespace by Argo CD.
+  links:
+    - url: https://github.com/OWNER/platform-engineering-idp/tree/main/docs
+      title: Platform runbooks
+      icon: docs
+    - url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-3-plan.md
+      title: How delivery works
+      icon: docs
+spec:
+  owner: platform-engineering
+  domain: internal-platform
+---
+# Resources describe infrastructure that services consume. They are catalogued
+# by hand because Terraform owns them: the catalog documents what exists, it does
+# not provision it. Provisioning from the portal would put two systems in charge
+# of one resource.
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: idp-dev-cluster
+  title: EKS Cluster (idp-dev)
+  description: Private-worker EKS cluster in eu-west-2, provisioned by Terraform.
+  annotations:
+    backstage.io/source-location: url:https://github.com/OWNER/platform-engineering-idp/tree/main/infrastructure/terraform/environments/dev/
+spec:
+  type: kubernetes-cluster
+  owner: platform-engineering
+  system: idp-dev
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: idp-image-registry
+  title: Amazon ECR (idp-*)
+  description: |
+    Per-service image repositories with immutable tags, scan-on-push and bounded
+    retention. Repositories are derived from the files in gitops/environments/dev.
+  annotations:
+    backstage.io/source-location: url:https://github.com/OWNER/platform-engineering-idp/tree/main/infrastructure/terraform/modules/ecr/
+spec:
+  type: container-registry
+  owner: platform-engineering
+  system: idp-dev
