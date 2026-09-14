@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:26-bookworm-slim
 ENV NODE_ENV=production PORT=8080
 WORKDIR /app
 # No dependencies or build output: a builder stage would add no value here.
