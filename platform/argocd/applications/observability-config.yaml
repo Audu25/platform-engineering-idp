@@ -1,0 +1,44 @@
+# The platform's own observability configuration: the collectors, the
+# auto-instrumentation every service inherits, the alert rules and the dashboard.
+#
+# Separate from the chart Applications because it changes for different reasons
+# and far more often. Editing an alert threshold should not risk a Helm upgrade.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-config
+  namespace: argocd
+  annotations:
+    # Wave 1: every custom resource here is defined by a CRD that wave 0
+    # installs, so this cannot be applied until those Applications are healthy.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/OWNER/platform-engineering-idp.git
+    targetRevision: main
+    path: platform/observability/manifests
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # On a first sync the CRDs may not exist yet, and a server-side dry run
+      # would fail on a kind the API server has never heard of. Retries cover
+      # the gap rather than the sync failing outright.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 8
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+  revisionHistoryLimit: 5

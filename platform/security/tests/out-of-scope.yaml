@@ -1,0 +1,40 @@
+# Platform components outside the workload namespace, which policy must leave
+# alone. This is shaped like the logs collector from Phase 5: an upstream image by
+# tag, running as root, reading the node's log files. Every one of those breaks a
+# service rule, and every one is correct for a platform component — so each
+# policy must skip these rather than reject them.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: platform-component
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+spec:
+  volumes:
+    - name: varlogpods
+      hostPath:
+        path: /var/log/pods
+    - name: config
+      secret:
+        secretName: logs-collector-config
+  containers:
+    - name: collector
+      image: otel/opentelemetry-collector-k8s:0.158.0
+      volumeMounts:
+        - name: varlogpods
+          mountPath: /var/log/pods
+          readOnly: true
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: platform-store
+  namespace: observability
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: eu-west-2
+      role: arn:aws:iam::111122223333:role/some-other-role

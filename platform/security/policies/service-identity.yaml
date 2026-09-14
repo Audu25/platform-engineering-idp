@@ -1,0 +1,72 @@
+# A service runs under its own service account, named after itself.
+#
+# The service account is what EKS Pod Identity binds an IAM role to. A pod on the
+# namespace's default account gets no role, which fails safe but silently; a pod
+# on another service's account gets that service's AWS permissions. Requiring the
+# account name to equal the app label closes the second case and makes the first
+# a clear rejection instead of a confusing runtime error.
+#
+# What this cannot prove is that the label itself is honest. That guarantee comes
+# from Git: workloads reach the cluster only through Argo CD Applications whose
+# names are reviewed and match a registered service.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: idp-service-identity
+  annotations:
+    policies.kyverno.io/title: Dedicated service account per service
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Pods must carry app.kubernetes.io/name, run under a service account of the
+      same name, and not mount a Kubernetes API token.
+spec:
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: true
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    # Every environment is governed identically. A rule staging does not enforce is
+    # a rule a release can pass staging while breaking.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: [idp-dev, idp-staging, idp-production]
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : object.spec.template.spec"
+    - name: podLabels
+      expression: >-
+        object.kind == 'Pod'
+          ? (has(object.metadata.labels) ? object.metadata.labels : {})
+          : (has(object.spec.template.metadata) && has(object.spec.template.metadata.labels)
+              ? object.spec.template.metadata.labels : {})
+    - name: appName
+      expression: >-
+        'app.kubernetes.io/name' in variables.podLabels
+          ? variables.podLabels['app.kubernetes.io/name'] : ''
+  validations:
+    - expression: "variables.appName != ''"
+      message: Pods must carry the app.kubernetes.io/name label that identifies their service.
+    - expression: >-
+        has(variables.podSpec.serviceAccountName) &&
+        variables.podSpec.serviceAccountName == variables.appName
+      messageExpression: >-
+        'Pods for ' + variables.appName + ' must run under the service account named ' +
+        variables.appName + ', which is the identity its IAM role is bound to.'
+    - expression: >-
+        has(variables.podSpec.automountServiceAccountToken) &&
+        variables.podSpec.automountServiceAccountToken == false
+      message: Services must set automountServiceAccountToken to false; they do not call the Kubernetes API.

@@ -1,0 +1,63 @@
+# Values for grafana/tempo, the single-binary chart.
+#
+# Tempo stores traces on local disk here. A trace outlives the request that
+# produced it by 24 hours and not the pod, which is enough to answer "what
+# happened just now" and not enough for an incident review.
+
+fullnameOverride: tempo
+
+tempo:
+  retention: 24h
+  # The collector is the only client, and it speaks OTLP. Jaeger, Zipkin and
+  # OpenCensus receivers are off because an unused receiver is an open port.
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+  # Turns spans into RED metrics (rate, errors, duration) that Prometheus can
+  # scrape, so a service gets latency and error-rate charts without anyone
+  # writing an instrumentation line for them.
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://kps-prometheus.observability.svc:9090/api/v1/write
+    processor:
+      span_metrics:
+        # Environments share one cluster, so a series without the namespace
+        # would blend staging's errors into production's error budget.
+        dimensions:
+          - k8s.namespace.name
+  # Enabling the generator starts the component; it produces nothing until
+  # processors are enabled for the tenant here. Without this block there are
+  # no span metrics at all, and every alert and panel built on them is inert.
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - span-metrics
+          - service-graphs
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+persistence:
+  enabled: false
+
+serviceMonitor:
+  enabled: true
+
+# The chart ships an optional Grafana; this cluster already has one.
+grafana:
+  enabled: false

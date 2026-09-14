@@ -51,3 +51,15 @@ variable "max_size" {
   type        = number
   default     = 4
 }
+
+variable "developer_role_arn" {
+  description = "Optional IAM role granted read-only access to developer_namespaces. Null grants nothing."
+  type        = string
+  default     = null
+}
+
+variable "developer_namespaces" {
+  description = "Namespaces the developer role can view. Secrets are excluded by the view policy itself."
+  type        = list(string)
+  default     = ["idp-dev"]
+}

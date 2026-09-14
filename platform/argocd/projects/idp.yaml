@@ -10,6 +10,10 @@ spec:
   destinations:
     - namespace: idp-dev
       server: https://kubernetes.default.svc
+    - namespace: idp-staging
+      server: https://kubernetes.default.svc
+    - namespace: idp-production
+      server: https://kubernetes.default.svc
     # The app-of-apps writes child Applications back into argocd. Only the
     # Application kind is whitelisted below, so this destination cannot be used
     # to place workloads next to the control plane.
@@ -24,3 +28,17 @@ spec:
       kind: Service
     - group: argoproj.io
       kind: Application
+    # Phase 6: a service's own identity and its secret wiring. The kinds that
+    # would reach beyond one namespace — ClusterSecretStore, ClusterExternalSecret
+    # — are absent here and are not even installed as CRDs.
+    - group: ""
+      kind: ServiceAccount
+    - group: external-secrets.io
+      kind: SecretStore
+    - group: external-secrets.io
+      kind: ExternalSecret
+    # Phase 7: scaling and disruption behaviour ship with the service.
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: policy
+      kind: PodDisruptionBudget

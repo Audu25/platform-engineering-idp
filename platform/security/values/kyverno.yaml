@@ -1,0 +1,63 @@
+# Values for kyverno/kyverno.
+#
+# Kyverno is the admission controller that turns the platform's conventions into
+# rules the API server enforces. Every policy in platform/security/policies is
+# scoped to the workload namespace; nothing here constrains the platform's own
+# components.
+
+admissionController:
+  # One replica is a development trade-off with a real consequence: the policies
+  # fail closed, so while this pod restarts nothing new can be admitted into the
+  # workload namespace. Production runs three.
+  replicas: 1
+  container:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 384Mi
+
+backgroundController:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+reportsController:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# No CleanupPolicy is used, and an idle controller is still a pod to schedule.
+cleanupController:
+  enabled: false
+
+config:
+  webhooks:
+    # The components a person needs to repair a broken admission path are never
+    # sent to it. If Kyverno is down and failing closed, Argo CD, Kyverno itself
+    # and the monitoring that tells you so all keep working.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kyverno
+            - argocd
+            - external-secrets
+            - observability
+
+features:
+  # An exception is an escape hatch from policy, so where one may live is itself
+  # policy. Only the kyverno namespace — which workloads cannot write to — is
+  # honoured, so a team cannot exempt its own deployment from review.
+  policyExceptions:
+    enabled: true
+    namespace: kyverno

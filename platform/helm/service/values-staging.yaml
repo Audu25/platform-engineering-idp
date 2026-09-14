@@ -1,0 +1,26 @@
+# Staging has production's shape at smaller scale. Passing staging only means
+# something if the release exercised the same chart features production will:
+# autoscaling, disruption budgets, secret wiring.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+aws:
+  accountId: "AWS_ACCOUNT_ID"
+  region: eu-west-2
+  resourcePrefix: idp-staging
+
+secrets:
+  enabled: true
+  refreshInterval: 5m

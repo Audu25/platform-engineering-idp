@@ -1,0 +1,136 @@
+# Alerts for services deployed by this platform.
+#
+# Each of these describes something a person would want woken for, or that
+# explains why a page happened. Alerts on things that are merely unusual — CPU
+# above a number, memory climbing — are deliberately absent: they fire during
+# normal operation, and an alert people learn to ignore is worse than no alert.
+#
+# Span metric names are Tempo's (traces_spanmetrics_*, confirmed against Tempo
+# 2.9.0). They exist only once the metrics generator has seen traffic, so these
+# rules are inert until a service has served requests.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: idp-service-alerts
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: idp-platform
+spec:
+  groups:
+    - name: idp.service.availability
+      rules:
+        - alert: ServiceDeploymentUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace=~"idp-(dev|staging|production)"}
+              < kube_deployment_spec_replicas{namespace=~"idp-(dev|staging|production)"}
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{ $labels.deployment }} has fewer replicas than it should'
+            description: >-
+              {{ $labels.deployment }} in {{ $labels.namespace }} has been short
+              of replicas for 10 minutes. On a spot cluster a brief shortfall is
+              normal reclaim; ten minutes means the replacement is not starting.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts
+
+        - alert: ServiceNoReplicasAvailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace=~"idp-(dev|staging|production)"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{ $labels.deployment }} is completely down'
+            description: >-
+              No replica of {{ $labels.deployment }} is available. This fires
+              faster than the shortfall alert because there is no degraded state
+              left to wait through.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts
+
+        - alert: ServicePodRestartLoop
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace=~"idp-(dev|staging|production)"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{ $labels.pod }} is restarting repeatedly'
+            description: >-
+              {{ $labels.container }} in {{ $labels.pod }} restarted more than
+              three times in fifteen minutes. A liveness probe failing under load
+              and a crash on startup look identical here; the logs distinguish them.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts
+
+    - name: idp.service.requests
+      rules:
+        - alert: ServiceHighErrorRate
+          expr: |
+            (
+              sum by (service) (
+                rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR", span_kind="SPAN_KIND_SERVER"}[5m])
+              )
+              /
+              sum by (service) (
+                rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m])
+              )
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: '{{ $labels.service }} is failing more than 5% of requests'
+            description: >-
+              Measured from server spans, so it counts what callers actually
+              experienced rather than what the process logged about itself.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts
+
+        - alert: ServiceLatencyHigh
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (service, le) (
+                rate(traces_spanmetrics_latency_bucket{span_kind="SPAN_KIND_SERVER"}[5m])
+              )
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{ $labels.service }} 95th percentile latency is above 1s'
+            description: >-
+              A percentile, not a mean: an average stays healthy while a quarter
+              of users time out. Ten minutes avoids paging on a single slow
+              deploy or a cold start.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts
+
+    - name: idp.telemetry.pipeline
+      rules:
+        # Monitoring that fails silently is worse than no monitoring, because the
+        # dashboards stay green. These two are how you find out the green is stale.
+        - alert: TelemetryExportFailing
+          expr: |
+            sum(rate(otelcol_exporter_send_failed_spans_total[5m])) > 0
+              or sum(rate(otelcol_exporter_send_failed_log_records_total[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: The collector is failing to export telemetry
+            description: >-
+              Spans or logs are being dropped between the collector and Tempo or
+              Loki. Traces will be missing without any service reporting a problem.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts
+
+        - alert: TelemetryCollectorRefusingData
+          expr: |
+            sum(rate(otelcol_receiver_refused_spans_total[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: The collector is refusing incoming telemetry
+            description: >-
+              The memory limiter is shedding load. The collector is undersized for
+              what services are sending, or something is sending far more than usual.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-5-plan.md#responding-to-alerts

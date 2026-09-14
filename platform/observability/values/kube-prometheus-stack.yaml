@@ -1,0 +1,153 @@
+# Values for prometheus-community/kube-prometheus-stack.
+#
+# Sizing assumes a development cluster of two t3.medium spot workers. Every
+# request below is deliberate: without them the scheduler treats these as
+# best-effort and evicts the monitoring stack first, exactly when something has
+# gone wrong and you need it.
+
+fullnameOverride: kps
+
+# --- EKS specifics -----------------------------------------------------------
+# On EKS the control plane is managed and its components are not reachable for
+# scraping. Left enabled, these produce permanently-down targets and alerts that
+# fire forever, which is how teams learn to ignore alerts.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+defaultRules:
+  create: true
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+
+# --- Prometheus --------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    retention: 24h
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    # Tempo's metrics generator turns spans into RED metrics and pushes them
+    # here, so a service gets latency and error-rate charts without anyone
+    # writing an instrumentation line for them.
+    enableRemoteWriteReceiver: true
+    # Storage is an emptyDir: metrics do not survive a pod restart. That is the
+    # right trade for a cluster torn down between sessions, and the wrong one for
+    # anything else — a PVC on the gp3 StorageClass is the change to make.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+    # Without these, only monitors and rules carrying this chart's release label
+    # are honoured, and the monitors the OpenTelemetry Operator creates for the
+    # collectors — plus the alert rules in this repository — are silently ignored.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+  config:
+    route:
+      group_by: [namespace, alertname]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: 'null'
+      routes:
+        - matchers: [alertname = Watchdog]
+          receiver: 'null'
+    receivers:
+      # No destination is configured on purpose. Wiring alerts to a channel
+      # nobody reads is worse than not wiring them: it looks like coverage.
+      # Alerts are demonstrated in the Alertmanager UI in this phase.
+      - name: 'null'
+
+# --- Grafana -----------------------------------------------------------------
+grafana:
+  # The password is not in this file and not in Git. Create the secret before
+  # syncing; the runbook has the command.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  defaultDashboardsTimezone: utc
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  sidecar:
+    dashboards:
+      enabled: true
+      # Any ConfigMap with this label becomes a dashboard, which is what makes
+      # dashboards reviewable files rather than clicks somebody made once.
+      label: grafana_dashboard
+      searchNamespace: observability
+  # Prometheus is added by the chart. These three signals are only useful
+  # together: a trace links to its logs, and a metric links to exemplar traces.
+  additionalDataSources:
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: http://tempo:3100
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          filterByTraceID: true
+          tags:
+            - key: k8s.pod.name
+              value: pod
+        tracesToMetrics:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki:3100
+      jsonData:
+        # Turns a trace_id in a log line into a link to the trace itself.
+        derivedFields:
+          - name: TraceID
+            matcherRegex: '"trace_id":"([a-f0-9]+)"'
+            url: '$${__value.raw}'
+            datasourceUid: tempo
+
+# --- Exporters ---------------------------------------------------------------
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi

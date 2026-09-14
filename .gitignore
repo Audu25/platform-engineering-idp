@@ -14,3 +14,6 @@ backend.hcl
 .DS_Store
 Thumbs.db
 artifacts/
+
+# Policy tests render the shared chart here on every run.
+platform/security/tests/rendered/

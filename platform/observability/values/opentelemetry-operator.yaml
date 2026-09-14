@@ -1,0 +1,27 @@
+# Values for open-telemetry/opentelemetry-operator.
+#
+# The operator exists here for one reason: it injects instrumentation into pods
+# that ask for it. That is what makes tracing a property of the platform rather
+# than a library every team has to adopt, remember to upgrade and configure
+# consistently.
+
+manager:
+  # The image the operator gives to every OpenTelemetryCollector it manages.
+  collectorImage:
+    repository: otel/opentelemetry-collector-k8s
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+admissionWebhooks:
+  # cert-manager is the usual source of webhook certificates and is not installed
+  # here. The operator can generate and rotate its own; that is one component
+  # fewer for a capability nothing else in this cluster needs yet.
+  certManager:
+    enabled: false
+  autoGenerateCert:
+    enabled: true
+    recreate: true

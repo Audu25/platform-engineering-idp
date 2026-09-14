@@ -14,6 +14,39 @@ image:
 imagePullSecrets: []
 service:
   port: 80
+
+# Horizontal scaling on CPU. Off by default so the chart renders the same for a
+# local install; staging and production turn it on.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# Limits how many replicas a voluntary disruption can take at once.
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 1
+
+# Each service runs under its own service account, which is what its IAM role is
+# bound to. Turning this off leaves the pod on the namespace's default account,
+# which admission policy rejects.
+serviceAccount:
+  create: true
+
+# Runtime configuration from AWS Secrets Manager, mounted as read-only files.
+# Enabling it needs the aws block, which environments supply.
+secrets:
+  enabled: false
+  refreshInterval: 1m
+  mountPath: /var/run/secrets/app
+
+# Observability is something a service gets by running here, not something it
+# adopts. The operator named below injects the OpenTelemetry SDK at admission,
+# so the container image carries no tracing dependency and cannot drift from the
+# platform's SDK version. Set instrumentation to "" to opt a service out.
+observability:
+  instrumentation: observability/nodejs
 resources:
   requests:
     cpu: 100m

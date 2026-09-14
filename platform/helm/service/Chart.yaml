@@ -2,7 +2,7 @@ apiVersion: v2
 name: service
 description: Standard chart for stateless HTTP services on the Internal Developer Platform
 type: application
-version: 0.3.0
+version: 0.6.0
 # Every service supplies its own image, so the chart's appVersion describes the
 # contract rather than any one service's release.
 appVersion: "1"

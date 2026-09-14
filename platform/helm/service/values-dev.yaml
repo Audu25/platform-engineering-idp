@@ -9,3 +9,16 @@ resources:
   limits:
     cpu: 500m
     memory: 128Mi
+
+# Where this environment's per-service IAM roles and secrets live. Terraform
+# names both <platform_prefix>-<environment>, so resourcePrefix is idp-dev here. The account ID
+# is quoted: unquoted, YAML reads it as a number and the chart refuses to render.
+aws:
+  accountId: "AWS_ACCOUNT_ID"
+  region: eu-west-2
+  resourcePrefix: idp-dev
+
+# Every registered service has a secret in Secrets Manager, created by
+# Terraform when its deployment state is merged, so every service reads one.
+secrets:
+  enabled: true

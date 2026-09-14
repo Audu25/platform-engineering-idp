@@ -183,3 +183,7 @@ spec:
              publishes the image, then opens a promotion pull request.
           3. Merge the promotion. Argo CD deploys it, and reverting that merge
              rolls it back.
+          4. Put runtime configuration in Secrets Manager at
+             `idp-dev/${{ parameters.name }}/config`, as a JSON object. Each key
+             appears as a read-only file under `/var/run/secrets/app` within a
+             minute, and changes there reach the running service without a restart.

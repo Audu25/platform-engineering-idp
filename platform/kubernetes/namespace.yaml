@@ -1,9 +1,41 @@
+# One namespace per environment. All three enforce the restricted Pod Security
+# Standard, so staging cannot pass a workload that production would refuse.
+---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: idp-dev
   labels:
     app.kubernetes.io/part-of: platform-engineering-idp
+    idp.platform/environment: dev
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.35
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idp-staging
+  labels:
+    app.kubernetes.io/part-of: platform-engineering-idp
+    idp.platform/environment: staging
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.35
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idp-production
+  labels:
+    app.kubernetes.io/part-of: platform-engineering-idp
+    idp.platform/environment: production
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: v1.35
     pod-security.kubernetes.io/audit: restricted

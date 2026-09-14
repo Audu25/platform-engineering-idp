@@ -1,0 +1,168 @@
+# Admission policy tests. Run with platform/scripts/test-policies.sh, which
+# renders rendered/service.yaml from the shared chart first.
+#
+# Every policy has at least one pass and one fail here, and check-platform.py
+# enforces that: a policy never shown to fail may never fire, and one never shown
+# to pass may be rejecting the platform's own chart.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: idp-admission-policies
+policies:
+  - ../policies/pod-security.yaml
+  - ../policies/images.yaml
+  - ../policies/resources.yaml
+  - ../policies/service-identity.yaml
+  - ../policies/secret-access.yaml
+  - ../policies/external-secrets.yaml
+resources:
+  - rendered/service-dev.yaml
+  - rendered/service-staging.yaml
+  - rendered/service-production.yaml
+  - violations/pods.yaml
+  - violations/deployment.yaml
+  - violations/external-secrets.yaml
+  - out-of-scope.yaml
+clusterResources:
+  - cluster-resources.yaml
+# Namespace labels. Without these the policies' namespace selectors match nothing
+# in particular and every namespace is evaluated.
+variables: values.yaml
+results:
+  # --- The platform's own chart passes everything ----------------------------
+  - isValidatingPolicy: true
+    policy: idp-pod-security
+    kind: Deployment
+    resources: [sample-service]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-pod-security
+    kind: Pod
+    resources: [sample-service-pod, sample-service-instrumented]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-images-from-platform-registry
+    kind: Deployment
+    resources: [sample-service]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-images-from-platform-registry
+    kind: Pod
+    resources: [sample-service-pod, sample-service-instrumented]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-require-resources
+    kind: Deployment
+    resources: [sample-service]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-require-resources
+    kind: Pod
+    resources: [sample-service-pod, sample-service-instrumented]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-service-identity
+    kind: Deployment
+    resources: [sample-service]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-service-identity
+    kind: Pod
+    resources: [sample-service-pod, sample-service-instrumented]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-own-secrets-only
+    kind: Deployment
+    resources: [sample-service]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-own-secrets-only
+    kind: Pod
+    resources: [sample-service-pod, sample-service-instrumented]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-external-secrets-scoped
+    kind: SecretStore
+    resources: [sample-service]
+    result: pass
+  - isValidatingPolicy: true
+    policy: idp-external-secrets-scoped
+    kind: ExternalSecret
+    resources: [sample-service]
+    result: pass
+
+  # --- Violations are rejected by the policy they target ---------------------
+  - isValidatingPolicy: true
+    policy: idp-images-from-platform-registry
+    kind: Pod
+    resources: [image-by-tag, image-from-another-registry]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-images-from-platform-registry
+    kind: Deployment
+    resources: [deployment-image-by-tag]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-pod-security
+    kind: Pod
+    resources: [runs-as-root, mounts-host-path, privileged-init-container]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-require-resources
+    kind: Pod
+    resources: [no-resources]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-service-identity
+    kind: Pod
+    resources: [default-service-account, borrowed-service-account]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-own-secrets-only
+    kind: Pod
+    resources: [mounts-neighbours-secret, env-from-neighbours-secret, name-prefix-collision]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-external-secrets-scoped
+    kind: SecretStore
+    resources: [store-with-neighbours-role, store-with-static-keys, store-from-another-environment]
+    result: fail
+  - isValidatingPolicy: true
+    policy: idp-external-secrets-scoped
+    kind: ExternalSecret
+    resources: [uses-neighbours-store, reads-neighbours-key, searches-for-keys, reads-another-environments-key]
+    result: fail
+
+  # --- Other namespaces are left alone ---------------------------------------
+  # A policy that reached into observability or argocd would reject the platform's
+  # own components, and could reject the tools needed to repair admission itself.
+  - isValidatingPolicy: true
+    policy: idp-pod-security
+    kind: Pod
+    resources: [platform-component]
+    result: skip
+  - isValidatingPolicy: true
+    policy: idp-images-from-platform-registry
+    kind: Pod
+    resources: [platform-component]
+    result: skip
+  - isValidatingPolicy: true
+    policy: idp-require-resources
+    kind: Pod
+    resources: [platform-component]
+    result: skip
+  - isValidatingPolicy: true
+    policy: idp-service-identity
+    kind: Pod
+    resources: [platform-component]
+    result: skip
+  - isValidatingPolicy: true
+    policy: idp-own-secrets-only
+    kind: Pod
+    resources: [platform-component]
+    result: skip
+  - isValidatingPolicy: true
+    policy: idp-external-secrets-scoped
+    kind: SecretStore
+    resources: [platform-store]
+    result: skip

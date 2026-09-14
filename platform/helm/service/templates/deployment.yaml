@@ -5,7 +5,11 @@ metadata:
   labels:
     {{- include "service.labels" . | nindent 4 }}
 spec:
+  {{- /* With autoscaling on, the autoscaler owns this field. Rendering it too would
+       make Argo CD reset the replica count on every reconciliation. */}}
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   revisionHistoryLimit: 3
   progressDeadlineSeconds: 180
   strategy:
@@ -20,13 +24,23 @@ spec:
     metadata:
       labels:
         {{- include "service.selectorLabels" . | nindent 8 }}
+      {{- with .Values.observability.instrumentation }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: {{ . | quote }}
+      {{- end }}
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "service.name" . }}
+      {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        # Mounted secret files are group-owned by this, so a non-root process can
+        # read them without the files being readable by everyone.
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
@@ -40,6 +54,25 @@ spec:
           labelSelector:
             matchLabels:
               {{- include "service.selectorLabels" . | nindent 14 }}
+        # Across availability zones as well as nodes: losing a zone should cost
+        # capacity, not the whole service.
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "service.selectorLabels" . | nindent 14 }}
+      {{- if .Values.secrets.enabled }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "service.name" . }}-config
+            # Optional so a newly registered service starts before anyone has put
+            # a value in its secret. External Secrets keeps retrying, and the files
+            # appear once the value exists.
+            optional: true
+            defaultMode: 0440
+      {{- end }}
       containers:
         - name: api
           image: {{ include "service.image" . | quote }}
@@ -52,11 +85,29 @@ spec:
               value: "8080"
             - name: APP_VERSION
               value: {{ .Values.image.tag | quote }}
+            {{- if .Values.observability.instrumentation }}
+            # Set here rather than left to the operator's default so that the
+            # name in a trace is the same string as the catalog entity, the Argo
+            # CD Application and the ECR repository. One service, one identifier.
+            - name: OTEL_SERVICE_NAME
+              value: {{ include "service.name" . | quote }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ printf "service.namespace=%s,service.version=%s" (.Values.partOf | default "idp") (.Values.image.tag | toString) | quote }}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          {{- if .Values.secrets.enabled }}
+          # Files rather than environment variables: a mounted Secret is updated
+          # in place when it rotates, while an environment variable is fixed for
+          # the life of the process and needs a restart to change.
+          volumeMounts:
+            - name: config
+              mountPath: {{ .Values.secrets.mountPath }}
+              readOnly: true
+          {{- end }}
           startupProbe:
             httpGet:
               path: /healthz

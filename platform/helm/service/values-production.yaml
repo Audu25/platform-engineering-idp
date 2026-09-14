@@ -1,0 +1,28 @@
+# Production. Three replicas at the floor so a spot reclaim during a rolling
+# update still leaves two serving, and the chart's zone spread puts them in
+# different availability zones where capacity allows.
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 96Mi
+  limits:
+    memory: 192Mi
+
+aws:
+  accountId: "AWS_ACCOUNT_ID"
+  region: eu-west-2
+  resourcePrefix: idp-production
+
+# An hour, not a minute: a rotation reaches production within the hour, and the
+# Secrets Manager call cost stops scaling with the refresh rate.
+secrets:
+  enabled: true
+  refreshInterval: 1h

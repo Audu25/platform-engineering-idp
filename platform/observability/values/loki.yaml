@@ -1,0 +1,101 @@
+# Values for grafana/loki in single-binary mode.
+#
+# The chart defaults to a distributed deployment with memcached in front of it,
+# which is correct for production and absurd for a two-node development cluster.
+# Everything below either shrinks that or turns it off.
+
+fullnameOverride: loki
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  # Logs live on the pod's own disk and do not survive it. Making them durable
+  # means object storage and a retention policy, which is a Phase 7 concern.
+  schemaConfig:
+    configs:
+      - from: '2024-04-01'
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 24h
+    # OTLP carries resource and scope attributes that do not fit the label model;
+    # structured metadata is where they land. Without this, ingesting OTLP logs
+    # fails rather than degrades.
+    allow_structured_metadata: true
+    volume_enabled: true
+    reject_old_samples: true
+    reject_old_samples_max_age: 24h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  # Single binary with one replica cannot form a ring with anyone else.
+  ingester:
+    chunk_encoding: snappy
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  persistence:
+    enabled: false
+
+# Every scaled-out component off. Leaving any of these at their default replica
+# count schedules pods that will never become ready on this cluster.
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+ingester:
+  replicas: 0
+querier:
+  replicas: 0
+queryFrontend:
+  replicas: 0
+queryScheduler:
+  replicas: 0
+distributor:
+  replicas: 0
+compactor:
+  replicas: 0
+indexGateway:
+  replicas: 0
+bloomCompactor:
+  replicas: 0
+bloomGateway:
+  replicas: 0
+
+# The gateway is an nginx proxy in front of the read/write paths. With a single
+# binary there is nothing to route between, so collectors address Loki directly.
+gateway:
+  enabled: false
+
+# Memcached tiers, each of which would request more memory than Loki itself.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# Anonymous usage reporting is off: a development cluster should not phone home.
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false

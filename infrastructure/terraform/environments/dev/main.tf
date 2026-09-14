@@ -17,6 +17,7 @@ module "eks" {
   desired_size        = var.desired_size
   min_size            = var.min_size
   max_size            = var.max_size
+  developer_role_arn  = var.developer_role_arn
   # Private nodes need outbound connectivity before bootstrap can complete.
   depends_on = [module.network]
 }

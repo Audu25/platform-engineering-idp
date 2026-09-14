@@ -1,0 +1,11 @@
+# Custom resource definitions the policies match. Without them the CLI cannot
+# resolve SecretStore or ExternalSecret and aborts the whole run. Namespace
+# labels do not come from here; the CLI reads them from values.yaml.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: ClusterResource
+metadata:
+  name: crds
+spec:
+  crds:
+    - crds/secretstores.yaml
+    - crds/externalsecrets.yaml

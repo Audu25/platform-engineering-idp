@@ -1,0 +1,50 @@
+# Tempo: the trace backend. Single binary, local storage, 24 hour retention.
+#
+# Chart version is pinned. An upstream chart that follows a range would let a
+# release nobody reviewed change the cluster's monitoring the next time Argo CD
+# reconciles, which is the moment monitoring is least likely to be watched.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-tempo
+  namespace: argocd
+  annotations:
+    # Charts install first; the configuration that depends on their custom
+    # resources follows in wave 1.
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: tempo
+      targetRevision: 1.24.4
+      helm:
+        releaseName: tempo
+        valueFiles:
+          - $values/platform/observability/values/tempo.yaml
+    # Values live in this repository so a change to how monitoring is configured
+    # is reviewed here rather than typed into an Application spec.
+    - repoURL: https://github.com/OWNER/platform-engineering-idp.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # These charts ship large CRDs that exceed the annotation size limit a
+      # client-side apply uses to store the previous configuration.
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+  revisionHistoryLimit: 5

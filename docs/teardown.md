@@ -35,6 +35,25 @@ VPC deletion. Remove Kubernetes-owned resources first.
    kubectl -n argocd get application            # must be empty before continuing
    ```
 
+   This removes the observability stack too. Nothing in it holds an AWS resource
+   — no load balancers, no volumes — so it costs nothing to leave running and
+   nothing to delete, but it is one of the larger consumers of node capacity.
+
+   This removes all three environments, whose Applications live in the same
+   namespace. Deleting only one environment means deleting only its Applications,
+   for example `kubectl -n argocd delete application sample-service-staging`.
+
+   Then confirm Kyverno removed its webhooks. Kyverno creates them at runtime,
+   so Argo CD never tracked them; the chart's pre-delete hook deletes them, and
+   Argo CD 3.5 runs that hook. If it did not run, the webhooks are still there,
+   still failing closed, and no pod can be created in `idp-dev` again:
+
+   ```bash
+   kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations | grep kyverno
+   # anything listed:
+   kubectl delete validatingwebhookconfiguration,mutatingwebhookconfiguration -l webhook.kyverno.io/managed-by=kyverno
+   ```
+
    The Applications carry `resources-finalizer.argocd.argoproj.io`, so deletion
    cascades to their workloads and only completes while the Argo CD controller is
    still running. Delete the Applications before the namespace, never after: a
@@ -116,9 +135,27 @@ Then reinstall the delivery layer, which lives entirely in Git:
 ```bash
 kubectl kustomize platform/argocd/install | kubectl apply -f -
 kubectl apply -f platform/kubernetes/namespace.yaml
-kubectl apply -f platform/argocd/project.yaml
+kubectl apply -f platform/argocd/projects/
 kubectl apply -f platform/argocd/applications/root.yaml
 ```
+
+Recreate the Grafana credential before the observability Applications sync; it is
+deliberately not in Git, so a rebuilt cluster has no copy of it. The command is in
+the [Phase 5 runbook](phase-5-plan.md). Metrics, logs and traces from before the
+teardown are gone: all three backends use ephemeral storage.
+
+**Secret values do not survive a rebuild.** Terraform recreates each service's
+secret, but empty: it owns that the secret exists, never its value, and the dev
+recovery window of zero days means the old secret was deleted immediately rather
+than kept for recovery. Put the values back before expecting services to read them:
+
+```bash
+aws secretsmanager put-secret-value --secret-id idp-<environment>/<service>/config --secret-string '{...}'
+```
+
+If `secret_recovery_window_days` was raised above zero, a rebuild inside that
+window fails instead, because the deleted secret still holds its name. Restore it
+with `aws secretsmanager restore-secret` and import it, or wait the window out.
 
 Argo CD then restores the workloads from the digests recorded in `gitops/`, with no
 republishing and no promotion needed: the rebuilt cluster runs the same image bytes

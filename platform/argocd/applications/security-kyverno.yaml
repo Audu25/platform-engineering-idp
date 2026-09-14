@@ -1,0 +1,47 @@
+# Kyverno: the admission controller that turns platform conventions into rules
+# the API server enforces for the workload namespace.
+#
+# Chart version is pinned. A policy engine that upgrades itself on reconciliation
+# can change what is admitted without anyone having reviewed the change.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: security-kyverno
+  namespace: argocd
+  annotations:
+    # Policy has to exist before the workloads it governs: the engine installs
+    # first (-2), its policies next (-1), and services after both (0).
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  sources:
+    - repoURL: https://kyverno.github.io/kyverno
+      chart: kyverno
+      targetRevision: 3.9.1
+      helm:
+        releaseName: kyverno
+        valueFiles:
+          - $values/platform/security/values/kyverno.yaml
+    - repoURL: https://github.com/OWNER/platform-engineering-idp.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Kyverno's CRDs exceed the annotation size a client-side apply uses.
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+  revisionHistoryLimit: 5

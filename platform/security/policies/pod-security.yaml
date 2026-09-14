@@ -1,0 +1,96 @@
+# Pod security for platform services.
+#
+# The shared chart already renders every one of these settings. The policy exists
+# for what the chart cannot stop: a hand-applied manifest, a chart edit that drops
+# a line, or a future template that forgets one. Admission is the last point at
+# which "the convention" can still be made true.
+#
+# Init containers are checked too. The OpenTelemetry Operator injects one at
+# admission, and the platform's Instrumentation gives it an explicit restricted
+# security context for exactly this reason: the namespaces enforce the restricted
+# Pod Security Standard, which would reject it otherwise, and this policy agrees
+# with that standard rather than carving out an exception to it.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: idp-pod-security
+  annotations:
+    policies.kyverno.io/title: Pod security for platform services
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Services run as non-root with the runtime default seccomp profile, a
+      read-only root filesystem, no privilege escalation, all capabilities
+      dropped, and no access to the host's network, processes or filesystem.
+spec:
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: true
+  # Deployments are matched explicitly below rather than generated, so the rules
+  # a reviewer reads are exactly the rules that run.
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    # Every environment is governed identically. A rule staging does not enforce is
+    # a rule a release can pass staging while breaking.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: [idp-dev, idp-staging, idp-production]
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : object.spec.template.spec"
+    - name: allContainers
+      expression: >-
+        variables.podSpec.containers +
+        (has(variables.podSpec.initContainers) ? variables.podSpec.initContainers : [])
+    - name: podContext
+      expression: "has(variables.podSpec.securityContext) ? variables.podSpec.securityContext : {}"
+  validations:
+    - expression: "has(variables.podContext.runAsNonRoot) && variables.podContext.runAsNonRoot == true"
+      message: The pod must set securityContext.runAsNonRoot to true.
+    - expression: >-
+        has(variables.podContext.seccompProfile) &&
+        variables.podContext.seccompProfile.type == 'RuntimeDefault'
+      message: The pod must use the RuntimeDefault seccomp profile.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.allowPrivilegeEscalation) &&
+          c.securityContext.allowPrivilegeEscalation == false &&
+          (!has(c.securityContext.privileged) || c.securityContext.privileged == false))
+      message: Every container, including init containers, must set allowPrivilegeEscalation to false and must not be privileged.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.readOnlyRootFilesystem) &&
+          c.securityContext.readOnlyRootFilesystem == true)
+      message: Every container, including init containers, must use a read-only root filesystem.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.capabilities) &&
+          has(c.securityContext.capabilities.drop) &&
+          'ALL' in c.securityContext.capabilities.drop &&
+          (!has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0))
+      message: Every container, including init containers, must drop ALL capabilities and add none back.
+    - expression: >-
+        (!has(variables.podSpec.hostNetwork) || variables.podSpec.hostNetwork == false) &&
+        (!has(variables.podSpec.hostPID) || variables.podSpec.hostPID == false) &&
+        (!has(variables.podSpec.hostIPC) || variables.podSpec.hostIPC == false)
+      message: Services must not share the host's network, process or IPC namespaces.
+    - expression: >-
+        !has(variables.podSpec.volumes) ||
+        variables.podSpec.volumes.all(v, !has(v.hostPath))
+      message: Services must not mount paths from the node's filesystem.

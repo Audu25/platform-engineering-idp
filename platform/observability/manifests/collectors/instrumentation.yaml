@@ -1,0 +1,58 @@
+# Auto-instrumentation. A pod carrying the annotation
+#   instrumentation.opentelemetry.io/inject-nodejs: "observability/nodejs"
+# gets an init container that copies the OpenTelemetry SDK in, and the
+# environment to make it export. The application adds no dependency, writes no
+# instrumentation code, and cannot forget to upgrade the SDK.
+#
+# This is the whole argument for a platform: tracing is a property of running
+# here, not a library every team adopts, configures and drifts on separately.
+#
+# The cost is honest. Auto-instrumentation produces spans for inbound and
+# outbound HTTP and nothing else. A span around a business decision still has to
+# be written by hand, and the SDK version is now the platform's problem.
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: nodejs
+  namespace: observability
+spec:
+  exporter:
+    endpoint: http://gateway-collector.observability.svc:4318
+  # Set explicitly rather than inherited. Left unset, the operator copies the
+  # security context of whichever container happens to be first, which is
+  # correct for this chart and silently wrong for any pod that orders its
+  # containers differently. The namespaces enforce the restricted Pod Security
+  # Standard, which rejects an init container without these settings.
+  initContainerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+  propagators:
+    - tracecontext
+    - baggage
+  sampler:
+    # Every request is sampled. That is affordable for a development cluster
+    # serving demonstration traffic and is the first thing to change under load;
+    # parentbased_traceidratio with a fraction is the same setting, tuned.
+    type: parentbased_traceidratio
+    argument: "1"
+  resource:
+    resourceAttributes:
+      deployment.environment: dev
+  nodejs:
+    env:
+      # Logs are already collected from the node by the logs daemonset, so the
+      # SDK exports traces and metrics only. Exporting logs twice would double
+      # the volume and produce two copies of every line in Loki.
+      - name: OTEL_LOGS_EXPORTER
+        value: none
+      - name: OTEL_TRACES_EXPORTER
+        value: otlp
+      - name: OTEL_METRICS_EXPORTER
+        value: otlp
+      - name: OTEL_EXPORTER_OTLP_PROTOCOL
+        value: http/protobuf

@@ -1,0 +1,61 @@
+# Platform components: the observability stack and anything else the platform
+# team runs for everyone. It is a separate project from `idp` because these
+# charts legitimately need what application delivery must never have — custom
+# resource definitions, cluster roles, admission webhooks and namespaces of their
+# own. Granting that to the project that deploys application code would mean a
+# compromised service chart could rewrite cluster-wide permissions.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Shared platform components installed from upstream charts
+  sourceRepos:
+    - https://github.com/OWNER/platform-engineering-idp.git
+    - https://prometheus-community.github.io/helm-charts
+    - https://grafana.github.io/helm-charts
+    - https://open-telemetry.github.io/opentelemetry-helm-charts
+    - https://kyverno.github.io/kyverno
+    - https://charts.external-secrets.io
+    - https://kubernetes-sigs.github.io/metrics-server/
+  destinations:
+    - namespace: observability
+      server: https://kubernetes.default.svc
+    - namespace: kube-system
+      server: https://kubernetes.default.svc
+    - namespace: kyverno
+      server: https://kubernetes.default.svc
+    - namespace: external-secrets
+      server: https://kubernetes.default.svc
+  # Upstream charts create their own namespace, CRDs and RBAC. Listing the kinds
+  # explicitly keeps "this chart installs a controller" from silently becoming
+  # "this chart installs anything at all".
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    # Admission policies are cluster-scoped objects. They live in this project,
+    # never in idp, so the code a policy constrains cannot also rewrite it.
+    - group: policies.kyverno.io
+      kind: ValidatingPolicy
+    # metrics-server serves the resource metrics API that autoscaling reads,
+    # which means registering an aggregated API with the API server.
+    - group: apiregistration.k8s.io
+      kind: APIService
+  namespaceResourceBlacklist:
+    # Nothing in this project has any business creating credentials for another
+    # workload or changing quota.
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange

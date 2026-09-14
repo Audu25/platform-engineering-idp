@@ -103,3 +103,43 @@ variable "cost_centre" {
   type        = string
   default     = "platform-idp"
 }
+
+variable "platform_prefix" {
+  description = "Prefix for workload namespaces, IAM roles and secrets, which are all named <prefix>-<environment>."
+  type        = string
+  default     = "idp"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{1,8}$", var.platform_prefix))
+    error_message = "Use 2-9 lowercase letters or digits, starting with a letter."
+  }
+}
+
+variable "workload_environments" {
+  description = "Environments that run services. Each is a namespace with its own roles and secrets; services are discovered per environment from gitops/environments/<environment>."
+  type        = list(string)
+  default     = ["dev", "staging", "production"]
+  validation {
+    condition     = length(var.workload_environments) > 0 && alltrue([for environment in var.workload_environments : can(regex("^[a-z]+$", environment))])
+    error_message = "Environment names are lowercase letters only."
+  }
+}
+
+variable "secret_recovery_window_days" {
+  description = "Days a deleted secret stays recoverable. Zero lets a torn-down environment be rebuilt immediately; use 7-30 anywhere data matters."
+  type        = number
+  default     = 0
+  validation {
+    condition     = var.secret_recovery_window_days == 0 || (var.secret_recovery_window_days >= 7 && var.secret_recovery_window_days <= 30)
+    error_message = "Secrets Manager accepts 0 (immediate) or 7-30 days."
+  }
+}
+
+variable "developer_role_arn" {
+  description = "Optional IAM role given read-only access to the workload namespace. Null grants nothing."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.developer_role_arn == null ? true : can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.developer_role_arn))
+    error_message = "Provide an IAM role ARN, not a user or session ARN."
+  }
+}

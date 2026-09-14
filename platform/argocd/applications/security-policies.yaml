@@ -1,0 +1,42 @@
+# The platform's admission policies, applied from this repository.
+#
+# Separate from the Kyverno Application because a policy change is reviewed on
+# its own merits and should never ride along with an engine upgrade.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: security-policies
+  namespace: argocd
+  annotations:
+    # After the engine that defines ValidatingPolicy, before the services it governs.
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/OWNER/platform-engineering-idp.git
+    targetRevision: main
+    path: platform/security/policies
+    directory:
+      # Policies only. Their tests live in platform/security/tests and must never
+      # be applied — the test fixtures are deliberately invalid resources.
+      recurse: false
+      include: '*.yaml'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # On a first sync the ValidatingPolicy CRD may not be registered yet.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 8
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+  revisionHistoryLimit: 5

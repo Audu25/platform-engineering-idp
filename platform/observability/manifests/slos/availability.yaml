@@ -1,0 +1,121 @@
+# Service level objectives, as multi-window, multi-burn-rate alerts.
+#
+# Objectives, over 30 days, measured from server spans:
+#   production  99.5% of requests succeed   (error budget 0.5%)
+#   staging     99.0% of requests succeed   (error budget 1.0%)
+#   dev         no objective: breaking dev is what dev is for
+#
+# An alert on "error rate above X" pages for a two-minute blip and stays silent
+# through a slow leak that spends the month's budget by Thursday. Burn rate asks
+# the question that matters instead — at this pace, when is the budget gone —
+# and each alert pairs a long window, which proves the burn is real, with a short
+# one, which proves it is still happening, so an alert clears soon after the
+# problem does.
+#
+#   Severity  Burn  Long  Short  Budget spent before it fires
+#   page      14.4  1h    5m     2% of the month in an hour
+#   page       6    6h    30m    5% of the month in six hours
+#   ticket     3    1d    2h     10% of the month in a day
+#
+# Every page also requires at least one request a minute. Below that, one failed
+# health check is a 50% error rate, and a page at 3am for it trains people to
+# ignore pages.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: idp-slo-availability
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: idp-platform
+spec:
+  groups:
+    - name: idp.slo.availability.recording
+      interval: 30s
+      rules:
+        - record: slo:requests:rate5m
+          expr: sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+        - record: slo:requests:rate1h
+          expr: sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[1h]))
+        - record: slo:errors:ratio_rate5m
+          expr: |
+            sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+              / sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+        - record: slo:errors:ratio_rate30m
+          expr: |
+            sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[30m]))
+              / sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[30m]))
+        - record: slo:errors:ratio_rate1h
+          expr: |
+            sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[1h]))
+              / sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[1h]))
+        - record: slo:errors:ratio_rate2h
+          expr: |
+            sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[2h]))
+              / sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[2h]))
+        - record: slo:errors:ratio_rate6h
+          expr: |
+            sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[6h]))
+              / sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[6h]))
+        - record: slo:errors:ratio_rate1d
+          expr: |
+            sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[1d]))
+              / sum by (service, k8s_namespace_name) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[1d]))
+
+    - name: idp.slo.availability.alerts
+      interval: 30s
+      rules:
+        # --- production: 99.5%, budget 0.005 ---------------------------------
+        - alert: SLOErrorBudgetBurnFast
+          expr: |
+            slo:errors:ratio_rate1h{k8s_namespace_name="idp-production"} > (14.4 * 0.005)
+              and slo:errors:ratio_rate5m{k8s_namespace_name="idp-production"} > (14.4 * 0.005)
+              and slo:requests:rate1h{k8s_namespace_name="idp-production"} > (1 / 60)
+          for: 2m
+          labels:
+            severity: page
+            slo: availability
+          annotations:
+            summary: '{{ $labels.service }} in {{ $labels.k8s_namespace_name }} is spending its error budget 14 times too fast'
+            description: At this rate the whole month's error budget is gone in about two days.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release
+        - alert: SLOErrorBudgetBurnSustained
+          expr: |
+            slo:errors:ratio_rate6h{k8s_namespace_name="idp-production"} > (6 * 0.005)
+              and slo:errors:ratio_rate30m{k8s_namespace_name="idp-production"} > (6 * 0.005)
+              and slo:requests:rate1h{k8s_namespace_name="idp-production"} > (1 / 60)
+          for: 5m
+          labels:
+            severity: page
+            slo: availability
+          annotations:
+            summary: '{{ $labels.service }} in {{ $labels.k8s_namespace_name }} has been spending its error budget 6 times too fast for hours'
+            description: At this rate the whole month's error budget is gone in five days.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release
+        - alert: SLOErrorBudgetBurnSlow
+          expr: |
+            slo:errors:ratio_rate1d{k8s_namespace_name="idp-production"} > (3 * 0.005)
+              and slo:errors:ratio_rate2h{k8s_namespace_name="idp-production"} > (3 * 0.005)
+          for: 15m
+          labels:
+            severity: ticket
+            slo: availability
+          annotations:
+            summary: '{{ $labels.service }} in {{ $labels.k8s_namespace_name }} is on course to exhaust its error budget this month'
+            description: Not urgent, but it will not fix itself. At this rate the budget lasts ten days.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release
+
+        # --- staging: 99%, budget 0.01. Tickets only: staging failing is the
+        # --- system working, and it should block a promotion, not wake anyone.
+        - alert: SLOErrorBudgetBurnFast
+          expr: |
+            slo:errors:ratio_rate1h{k8s_namespace_name="idp-staging"} > (14.4 * 0.01)
+              and slo:errors:ratio_rate5m{k8s_namespace_name="idp-staging"} > (14.4 * 0.01)
+              and slo:requests:rate1h{k8s_namespace_name="idp-staging"} > (1 / 60)
+          for: 2m
+          labels:
+            severity: ticket
+            slo: availability
+          annotations:
+            summary: '{{ $labels.service }} in {{ $labels.k8s_namespace_name }} is spending its error budget 14 times too fast'
+            description: Do not promote this release to production until staging recovers.
+            runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release

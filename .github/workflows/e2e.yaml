@@ -1,0 +1,63 @@
+name: End-to-end
+
+# Runs the chart, secrets handling, rollback and admission policy against a real
+# Kubernetes API server in kind. Slower than the configuration checks, so it runs
+# when something it exercises changes rather than on every pull request.
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - 'platform/helm/**'
+      - 'platform/kubernetes/**'
+      - 'platform/security/**'
+      - 'platform/scripts/e2e-kind.sh'
+      - '.github/workflows/e2e.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'platform/helm/**'
+      - 'platform/kubernetes/**'
+      - 'platform/security/**'
+      - 'platform/scripts/e2e-kind.sh'
+      - '.github/workflows/e2e.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v3.19.0
+
+      - name: Create the kind cluster
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          version: v0.33.0
+          cluster_name: idp-e2e
+          wait: 180s
+
+      - name: Run the end-to-end test
+        env:
+          KIND_CLUSTER: idp-e2e
+        run: bash platform/scripts/e2e-kind.sh
+
+      - name: Describe the cluster on failure
+        if: failure()
+        run: |
+          kubectl get pods --all-namespaces -o wide
+          kubectl get events --all-namespaces --sort-by=.lastTimestamp | tail -60
+          kubectl -n idp-dev describe deployment sample-service || true

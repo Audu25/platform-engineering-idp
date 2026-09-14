@@ -1,0 +1,48 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $min := int .Values.autoscaling.minReplicas }}
+{{- $max := int .Values.autoscaling.maxReplicas }}
+{{- /*
+One replica cannot survive its own rolling update or a node drain without an
+outage, and an autoscaler that is allowed to reach one will eventually do so at
+the quietest hour, which is also when nobody is watching.
+*/}}
+{{- if lt $min 2 }}
+{{- fail "autoscaling.minReplicas must be at least 2" }}
+{{- end }}
+{{- if lt $max $min }}
+{{- fail "autoscaling.maxReplicas must be greater than or equal to minReplicas" }}
+{{- end }}
+# Scales on CPU, which the platform can always measure because admission policy
+# requires every container to request it. Utilisation is a percentage of the
+# request, so a service with no request would have no meaningful target at all.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "service.name" . }}
+  minReplicas: {{ $min }}
+  maxReplicas: {{ $max }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    # Scale up as fast as the default allows; scale down slowly and one pod at a
+    # time. Flapping down during a brief lull and back up for the next burst costs
+    # cold starts on every cycle, which is worse than paying for idle capacity.
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+{{- end }}

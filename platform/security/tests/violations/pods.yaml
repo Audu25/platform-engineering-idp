@@ -1,0 +1,372 @@
+# Pods that must be rejected. Each one is a compliant pod with exactly one thing
+# wrong, named for that thing, so a failure points at the rule that caught it.
+#
+# These double as the runbook's demonstration: `kubectl apply -f` any of them in
+# idp-dev and the API server returns the policy's message.
+---
+# Tag, not digest: the promoted, scanned bytes are not what would run.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: image-by-tag
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service:0123456789ab
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# Pinned by digest, but from a registry CI never pushed to or scanned.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: image-from-another-registry
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: docker.io/library/nginx@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# Root, with privilege escalation allowed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: runs-as-root
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: false
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: true
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# Reads the node's filesystem.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mounts-host-path
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: node
+      hostPath:
+        path: /var/lib/kubelet
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+      volumeMounts:
+        - name: node
+          mountPath: /node
+          readOnly: true
+---
+# No requests and no limit: invisible to the scheduler, unbounded on the node.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-resources
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+---
+# No service account named, so the namespace default: no IAM role, no identity.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: default-service-account
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# Labelled as sample-service but running as payments, which would hand it the
+# payments service's IAM role.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: borrowed-service-account
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: payments
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# Mounts the Secret External Secrets created for a different service.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mounts-neighbours-secret
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: config
+      secret:
+        secretName: payments-config
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# Same theft, through an environment variable instead of a volume.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: env-from-neighbours-secret
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      env:
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: payments-config
+              key: password
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# A service named "pay" reaching "payments-config". A prefix check without the
+# trailing hyphen would let this through; this fixture is why the hyphen exists.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: name-prefix-collision
+  namespace: idp-dev
+  labels:
+    app.kubernetes.io/name: pay
+spec:
+  serviceAccountName: pay
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: config
+      secret:
+        secretName: payments-config
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/pay@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+---
+# The application container is hardened, but an init container is not. Init
+# containers run with the pod's service account and volumes, so a privileged one
+# is as dangerous as a privileged application container.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privileged-init-container
+  namespace: idp-production
+  labels:
+    app.kubernetes.io/name: sample-service
+spec:
+  serviceAccountName: sample-service
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+    - name: setup
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: true
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+  containers:
+    - name: api
+      image: 111122223333.dkr.ecr.eu-west-2.amazonaws.com/idp-dev/sample-service@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi

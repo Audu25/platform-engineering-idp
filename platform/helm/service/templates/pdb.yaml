@@ -1,0 +1,28 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $floor := ternary (int .Values.autoscaling.minReplicas) (int .Values.replicaCount) .Values.autoscaling.enabled }}
+{{- /*
+A disruption budget on a single replica does not protect it: it makes every node
+drain, spot rebalance and cluster upgrade hang until someone deletes the budget
+by hand. Refusing to render is cheaper than discovering that during an upgrade.
+*/}}
+{{- if lt $floor 2 }}
+{{- fail "podDisruptionBudget needs at least 2 replicas; with one it blocks every node drain" }}
+{{- end }}
+# Voluntary disruptions — a node drain, a spot rebalance, a cluster upgrade — take
+# at most this many replicas at once. Involuntary ones, such as a spot reclaim,
+# are not governed by this and are what the replica floor is for.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  # A pod that is already crash-looping is not serving anyone. Without this, it
+  # still counts against the budget and can block a drain indefinitely.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+{{- end }}

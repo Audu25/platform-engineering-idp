@@ -1,0 +1,102 @@
+name: Promote
+
+# Moves a service's image one environment forward, by digest.
+#
+# Two approvals stand between a digest and production. This job runs in a GitHub
+# Environment named after the target, and the production Environment requires a
+# reviewer before the job receives a token that can push. The job then opens a
+# pull request rather than pushing to main, and merging that is the second.
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service to promote, as named in gitops/environments
+        required: true
+        type: string
+      target:
+        description: Environment to promote into; the source is the one before it
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+# Two promotions of the same service would race to rewrite the same file.
+concurrency:
+  group: promote-${{ inputs.service }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ${{ inputs.target }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Full history, because the legality check below looks for the digest in
+      # the previous environment's past, not just its present.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Promote the digest
+        id: promote
+        env:
+          SERVICE: ${{ inputs.service }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          case "${TARGET}" in
+            staging) source=dev ;;
+            production) source=staging ;;
+            *) echo "unknown target ${TARGET}"; exit 1 ;;
+          esac
+          platform/scripts/promote-environment.sh --service "${SERVICE}" --from "${source}" --to "${TARGET}"
+          echo "source=${source}" >> "$GITHUB_OUTPUT"
+          echo "digest=$(sed -n 's/^  digest: "\(.*\)"$/\1/p' "gitops/environments/${TARGET}/${SERVICE}.yaml")" >> "$GITHUB_OUTPUT"
+
+      # The same checks CI runs, including that the digest has already been
+      # deployed to the environment before this one.
+      - name: Check the promotion is legal
+        run: python3 platform/scripts/check-platform.py .
+
+      - name: Open the promotion pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVICE: ${{ inputs.service }}
+          TARGET: ${{ inputs.target }}
+          SOURCE: ${{ steps.promote.outputs.source }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "Nothing changed; ${SERVICE} in ${TARGET} already runs this digest."
+            exit 0
+          fi
+          short="${DIGEST#sha256:}"
+          short="${short:0:12}"
+          branch="promote/${SERVICE}-${TARGET}-${short}"
+          title="Promote ${SERVICE} ${short} to ${TARGET}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "${branch}"
+          git add gitops/environments platform/argocd/applications
+          git commit -m "${title}"
+          git push --force-with-lease origin "${branch}"
+          cat > "${RUNNER_TEMP}/pr-body.md" <<EOF
+          Promotes \`${SERVICE}\` from ${SOURCE} to ${TARGET}.
+
+          - Digest: \`${DIGEST}\` — the bytes ${SOURCE} runs, copied rather than rebuilt
+          - Requested by: @${GITHUB_ACTOR}
+
+          CI has checked that this digest has already been deployed to ${SOURCE}.
+          Merging this deploys it. Reverting the merge rolls it back.
+          EOF
+          gh pr create --base main --head "${branch}" \
+            --title "${title}" --body-file "${RUNNER_TEMP}/pr-body.md"

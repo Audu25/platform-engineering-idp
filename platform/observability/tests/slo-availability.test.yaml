@@ -1,0 +1,128 @@
+# Unit tests for the availability SLO alerts. Run with platform/scripts/test-alerts.sh.
+#
+# An alert rule is only a claim until it has been shown to fire when it should and
+# to stay quiet when it should. These build synthetic span-metric series and check
+# both, including the cases most likely to go wrong: low traffic, a staging
+# incident, and recovery.
+#
+# Series notation: 'a+bxN' starts at a and adds b every interval, N times. With a
+# one-minute interval, 60 per step is one request a second.
+rule_files:
+  - slo-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- 10% errors in production at 1 request/second: fast burn pages -------
+  - interval: 1m
+    input_series:
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_UNSET"}'
+        values: '0+54x120'
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+6x120'
+    alert_rule_test:
+      # One minute in, both windows already read 10% errors: a rate is computed
+      # over whatever samples exist, not diluted by the ones that do not yet. The
+      # alert is still quiet because the condition must hold for two minutes, so
+      # a single bad evaluation cannot page anyone.
+      - eval_time: 1m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: availability
+              service: sample-service
+              k8s_namespace_name: idp-production
+            exp_annotations:
+              summary: sample-service in idp-production is spending its error budget 14 times too fast
+              description: At this rate the whole month's error budget is gone in about two days.
+              runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release
+
+  # --- Healthy production: nothing fires -----------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_UNSET"}'
+        values: '0+60x120'
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+
+  # --- Every request failing, but one request every two minutes: no page --
+  # Fifty percent errors on almost no traffic is a failing health check, not an
+  # outage users feel. The traffic floor is what keeps this quiet.
+  - interval: 1m
+    input_series:
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+0.5x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+
+  # --- The same incident in staging: a ticket, never a page ----------------
+  # 20% errors is past staging's fast-burn threshold of 14.4%.
+  - interval: 1m
+    input_series:
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-staging", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_UNSET"}'
+        values: '0+48x120'
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-staging", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+12x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: availability
+              service: sample-service
+              k8s_namespace_name: idp-staging
+            exp_annotations:
+              summary: sample-service in idp-staging is spending its error budget 14 times too fast
+              description: Do not promote this release to production until staging recovers.
+              runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release
+
+  # --- Dev has no objective: a total outage there alerts on nothing --------
+  - interval: 1m
+    input_series:
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-dev", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+60x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: SLOErrorBudgetBurnSustained
+        exp_alerts: []
+
+  # --- Recovery: errors stop after an hour, and the page clears ------------
+  # The short window is what makes this fast. Without it the alert would keep
+  # firing for most of an hour after the fix, while the one-hour average decays.
+  - interval: 1m
+    input_series:
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_UNSET"}'
+        values: '0+54x70 3780+60x60'
+      - series: 'traces_spanmetrics_calls_total{service="sample-service", k8s_namespace_name="idp-production", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+6x70 420+0x60'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: availability
+              service: sample-service
+              k8s_namespace_name: idp-production
+            exp_annotations:
+              summary: sample-service in idp-production is spending its error budget 14 times too fast
+              description: At this rate the whole month's error budget is gone in about two days.
+              runbook_url: https://github.com/OWNER/platform-engineering-idp/blob/main/docs/phase-7-plan.md#recovering-a-release
+      # Twelve minutes after errors stop, the five-minute window is clean.
+      - eval_time: 82m
+        alertname: SLOErrorBudgetBurnFast
+        exp_alerts: []

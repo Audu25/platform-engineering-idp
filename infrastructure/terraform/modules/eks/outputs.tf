@@ -21,3 +21,8 @@ output "addon_versions" {
   description = "Resolved managed add-on versions, recorded so upgrades are visible in the plan."
   value       = local.addon_versions
 }
+
+output "cluster_arn" {
+  description = "Cluster ARN, for policies that scope to this cluster."
+  value       = aws_eks_cluster.this.arn
+}

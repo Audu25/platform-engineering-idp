@@ -1,0 +1,101 @@
+# Log collection. One collector per node reads container log files and forwards
+# them to Loki as OTLP, so the same technology carries all three signals and
+# there is no second agent with its own configuration language to learn.
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: logs
+  namespace: observability
+spec:
+  mode: daemonset
+  serviceAccount: otel-collector
+  observability:
+    metrics:
+      enableMetrics: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  # Reading another container's log files means reading the node's disk. Both
+  # mounts are read-only: this collector never writes to the host.
+  volumes:
+    - name: varlogpods
+      hostPath:
+        path: /var/log/pods
+    - name: varlibdockercontainers
+      hostPath:
+        path: /var/lib/docker/containers
+  volumeMounts:
+    - name: varlogpods
+      mountPath: /var/log/pods
+      readOnly: true
+    - name: varlibdockercontainers
+      mountPath: /var/lib/docker/containers
+      readOnly: true
+  config:
+    receivers:
+      filelog:
+        include:
+          - /var/log/pods/*/*/*.log
+        # The collector's own logs would otherwise be ingested by the collector,
+        # and one dropped-batch warning would become an endless stream of them.
+        exclude:
+          - /var/log/pods/observability_logs-*/**/*.log
+        start_at: end
+        include_file_path: true
+        include_file_name: false
+        operators:
+          # containerd writes CRI-O format lines; this parses the timestamp,
+          # stream and message out of them and reassembles split lines.
+          - type: container
+            id: container-parser
+            add_metadata_from_filepath: true
+          # Application logs are JSON by platform convention. Parsing them here
+          # is what makes trace_id a field Grafana can link on rather than text
+          # inside a string.
+          - type: json_parser
+            if: 'body matches "^\\{"'
+            parse_from: body
+            parse_to: attributes
+            on_error: send
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.container.name
+            - k8s.deployment.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+              - from: resource_attribute
+                name: k8s.namespace.name
+
+      batch:
+        send_batch_size: 512
+        timeout: 5s
+
+    exporters:
+      otlphttp/loki:
+        endpoint: http://loki.observability.svc:3100/otlp
+        retry_on_failure:
+          enabled: true
+
+    service:
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/loki]

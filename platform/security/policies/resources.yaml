@@ -1,0 +1,57 @@
+# Resource requests and a memory limit on every service container.
+#
+# Without requests the scheduler treats a pod as free, packs nodes until they
+# fall over, and evicts the unrequested pods first. Without a memory limit one
+# leaking service takes its neighbours down with the node. On a two-node spot
+# cluster both failures arrive quickly.
+#
+# CPU limits are deliberately not required: they throttle a service that has
+# idle CPU available next to it, which shows up as latency rather than as an
+# error, and is much harder to diagnose than the problem it prevents.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: idp-require-resources
+  annotations:
+    policies.kyverno.io/title: Resource requests and memory limits
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Every service container must request CPU and memory and set a memory limit.
+spec:
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: true
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    # Every environment is governed identically. A rule staging does not enforce is
+    # a rule a release can pass staging while breaking.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: [idp-dev, idp-staging, idp-production]
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : object.spec.template.spec"
+  validations:
+    - expression: >-
+        variables.podSpec.containers.all(c,
+          has(c.resources) &&
+          has(c.resources.requests) &&
+          'cpu' in c.resources.requests &&
+          'memory' in c.resources.requests &&
+          has(c.resources.limits) &&
+          'memory' in c.resources.limits)
+      message: Every container must request CPU and memory and set a memory limit.

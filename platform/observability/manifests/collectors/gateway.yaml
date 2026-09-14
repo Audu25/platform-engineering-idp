@@ -1,0 +1,122 @@
+# The gateway collector. Every service sends OTLP here and nowhere else, which
+# is the point: services know one endpoint, and where traces, metrics and logs
+# actually go is a platform decision that can change without touching a service.
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: gateway
+  namespace: observability
+spec:
+  mode: deployment
+  replicas: 1
+  serviceAccount: otel-collector
+  # The operator creates the monitor for the collector's own metrics. Writing
+  # one by hand means guessing the port names it generates and keeping them in
+  # step; those metrics are how the telemetry-pipeline alerts see anything.
+  observability:
+    metrics:
+      enableMetrics: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      # First in every pipeline. Under memory pressure the collector starts
+      # refusing data rather than being OOM killed, because a collector that
+      # dies takes with it everything it had already accepted.
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+
+      # Turns a sender's IP into pod, namespace, node and deployment. Without
+      # it a trace says a request was slow but not which pod served it.
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+            - k8s.deployment.name
+          labels:
+            - tag_name: service
+              key: app.kubernetes.io/name
+              from: pod
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: connection
+
+      batch:
+        send_batch_size: 512
+        send_batch_max_size: 1024
+        timeout: 5s
+
+    exporters:
+      otlp/tempo:
+        endpoint: tempo.observability.svc:4317
+        tls:
+          # Traffic stays inside the cluster and never leaves the VPC. Mutual TLS
+          # between platform components is a service-mesh decision, not this one.
+          insecure: true
+        retry_on_failure:
+          enabled: true
+
+      otlphttp/loki:
+        # Loki 3 accepts OTLP directly, so logs need no separate agent or
+        # format translation on the way in.
+        endpoint: http://loki.observability.svc:3100/otlp
+        retry_on_failure:
+          enabled: true
+
+      # Metrics are pushed to Prometheus rather than exposed for scraping. A
+      # scrape target would mean guessing the port name the operator generates
+      # and keeping a monitor in step with it; remote write is one endpoint that
+      # either works or fails loudly.
+      prometheusremotewrite:
+        endpoint: http://kps-prometheus.observability.svc:9090/api/v1/write
+        # Without this, resource attributes such as service.name are dropped and
+        # a metric cannot be tied back to the service that produced it.
+        resource_to_telemetry_conversion:
+          enabled: true
+        retry_on_failure:
+          enabled: true
+
+    service:
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlp/tempo]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [prometheusremotewrite]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/loki]

@@ -73,11 +73,11 @@ kubectl kustomize platform/argocd/install | kubectl apply -f -
 kubectl -n argocd rollout status deploy/argocd-server --timeout=300s
 
 kubectl apply -f platform/kubernetes/namespace.yaml
-kubectl apply -f platform/argocd/project.yaml
+kubectl apply -f platform/argocd/projects/
 kubectl apply -f platform/argocd/applications/root.yaml
 ```
 
-Replace `OWNER` in `project.yaml` and both files under
+Replace `OWNER` in `platform/argocd/projects/` and under
 `platform/argocd/applications/` with the GitHub account first; the AppProject
 restricts sources to that exact repository URL.
 

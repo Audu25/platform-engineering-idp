@@ -22,6 +22,20 @@ the `CODEOWNERS`-style review of `gitops/**` give most of the same separation
 without a second repository to clone. Splitting it out is a directory move plus
 a `repoURL` change in the Argo CD Application.
 
+## Environments
+
+`environments/dev`, `environments/staging` and `environments/production` each hold one
+file per service deployed there. A file's existence registers the service in that
+environment — Terraform creates its IAM role and secret — and its digest is what
+runs. A service enters each environment only through the one before it, and CI
+checks from Git history that every digest already ran in the previous environment.
+
+Move a release forward with the `Promote` workflow, or locally:
+
+```bash
+platform/scripts/promote-environment.sh --service sample-service --from staging --to production
+```
+
 ## Promoting by hand
 
 ```bash

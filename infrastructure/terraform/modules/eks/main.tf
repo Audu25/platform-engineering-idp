@@ -102,3 +102,27 @@ resource "aws_eks_node_group" "this" {
   }
   depends_on = [aws_iam_role_policy_attachment.nodes]
 }
+
+# Developers read; Git writes. The view policy covers workloads, events and pod
+# logs in the listed namespaces and excludes Secrets, so a developer can debug a
+# deployment without being able to change it outside review or read credentials.
+# Changes still reach the cluster only through a merged pull request.
+resource "aws_eks_access_entry" "developer" {
+  count = var.developer_role_arn == null ? 0 : 1
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = var.developer_role_arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "developer" {
+  count = var.developer_role_arn == null ? 0 : 1
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = aws_eks_access_entry.developer[0].principal_arn
+  policy_arn    = "arn:${data.aws_partition.current.partition}:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+  access_scope {
+    type       = "namespace"
+    namespaces = var.developer_namespaces
+  }
+}

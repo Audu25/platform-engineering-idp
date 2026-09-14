@@ -1,0 +1,24 @@
+# Namespace labels for the Kyverno CLI.
+#
+# The policies select namespaces by label. In a cluster the API server supplies
+# those labels; the CLI has no API server and does not read them from Namespace
+# objects, only from here. Without this file every policy evaluates every
+# namespace, and the out-of-scope results in kyverno-test.yaml would prove
+# nothing — which is exactly how this file came to exist.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Value
+metadata:
+  name: values
+namespaceSelector:
+  - name: idp-dev
+    labels:
+      kubernetes.io/metadata.name: idp-dev
+  - name: idp-staging
+    labels:
+      kubernetes.io/metadata.name: idp-staging
+  - name: idp-production
+    labels:
+      kubernetes.io/metadata.name: idp-production
+  - name: observability
+    labels:
+      kubernetes.io/metadata.name: observability

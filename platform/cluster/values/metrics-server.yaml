@@ -1,0 +1,29 @@
+# Values for kubernetes-sigs/metrics-server.
+#
+# EKS does not install metrics-server, and without it a HorizontalPodAutoscaler
+# reports "unable to get metrics" and never scales. It is cluster infrastructure
+# rather than observability: it holds a few seconds of CPU and memory readings
+# for scheduling decisions, not history.
+
+# Two replicas, because every autoscaler in every environment stops making
+# decisions while the only one restarts.
+replicas: 2
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: metrics-server
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi

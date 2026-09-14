@@ -40,10 +40,14 @@ if ! printf '%s' "${digest#sha256:}" | grep -Eq '^[0-9a-f]{64}$'; then
   exit 1
 fi
 
+service="$(basename "$file" .yaml)"
+environment="$(basename "$(dirname "$file")")"
+
 mkdir -p "$(dirname "$file")"
 cat > "$file" <<YAML
-# Deployment state for sample-service in dev. Rewritten by the promotion job in
-# .github/workflows/ci.yaml; edit by hand only to force a specific image.
+# Deployment state for ${service} in ${environment}. Written by
+# platform/scripts/promote-image.sh: from CI for dev, from the Promote workflow
+# for staging and production. Edit by hand only to force a specific image.
 #
 # This file is the whole deployment interface: changing it is what deploys, and
 # reverting the commit that changed it is what rolls back.
