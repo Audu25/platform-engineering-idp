@@ -209,7 +209,10 @@ jobs:
             --security-opt=no-new-privileges --memory=128m --cpus=0.5 \
             -p 127.0.0.1:8080:8080 sample-service:${{ github.sha }}
           trap 'docker logs sample-service; docker rm -f sample-service' EXIT
-          curl --fail --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:8080/readyz
+          # Docker's port forwarder accepts a connection before the app inside is
+          # listening, then resets it. That surfaces as "connection reset", not
+          # "refused", so retrying only refusals fails on a fast runner.
+          curl --fail --retry 15 --retry-delay 1 --retry-all-errors http://127.0.0.1:8080/readyz
           curl --fail http://127.0.0.1:8080/healthz
           docker stop --time 15 sample-service
           test "$(docker inspect --format='{{.State.ExitCode}}' sample-service)" = '0'
