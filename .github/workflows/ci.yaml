@@ -26,7 +26,7 @@ jobs:
       run:
         working-directory: apps/sample-service
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -44,7 +44,7 @@ jobs:
     steps:
       # Full history: the platform check proves each promoted digest ran in the
       # previous environment first, which a shallow clone cannot show.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -196,7 +196,7 @@ jobs:
       repository: ${{ steps.push.outputs.repository }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build image
@@ -284,7 +284,7 @@ jobs:
     steps:
       # Credentials are kept here on purpose: this job pushes a branch. It is the
       # only job in the pipeline that can write to the repository.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: true
 
