@@ -507,6 +507,30 @@ were in the test harness, and none would have been found without a real API serv
 | --- | --- |
 | A runbook link changed to a file that does not exist | Caught by the documentation link check |
 
+### Base image, chosen from scan data
+
+The first CI run on `main` failed the Grype gate: the Debian 12 base carried high and
+critical findings that Debian marks "won't fix" or has not fixed, so a strict gate
+against it could never pass. Four candidates were scanned with Grype 0.118.0 on
+2026-09-16, counting high and critical findings and how many had a fix available.
+
+| Base image | Findings | High or critical | Of those, fixable |
+| --- | --- | --- | --- |
+| `node:24-bookworm-slim` (Debian 12) | 240 | 66 | 6 |
+| `node:24-trixie-slim` (Debian 13) | 195 | 76 | 24 |
+| `node:24-alpine` | 32 | 22 | 22 |
+| `gcr.io/distroless/nodejs24-debian12` | 73 | 31 | 23 |
+
+Alpine was chosen because every high or critical finding in it is fixable, which keeps
+the gate strict rather than narrowing it to ignore what cannot be fixed. Its findings
+were two OpenSSL packages, cleared by `apk upgrade`, and four in npm's own dependency
+tree, cleared by removing npm from the image: a service with no dependencies does not
+need a package manager in production. The skeleton the service template ships was
+changed the same way, so scaffolded services inherit it.
+
+The rebuilt image has not been scanned locally, because the Docker engine was stopped
+again by the time the change was made. CI's scan is the check.
+
 ### Phase 8: not verified
 
 - **Kubernetes 1.35 to 1.37 locally.** The platform targets 1.35 on EKS; the local run

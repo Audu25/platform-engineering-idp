@@ -1,5 +1,15 @@
-FROM node:24-bookworm-slim
+# Alpine rather than Debian slim, for what the scanner can act on. Debian 12
+# carries around sixty high or critical findings that Debian marks "won't fix"
+# or has not fixed, so the strict scan gate in CI can never pass against it.
+# Alpine's are all fixable, and the two lines below fix them: the OS packages
+# are upgraded, and npm is removed because a service with no dependencies does
+# not need a package manager in production — which also removes every finding in
+# npm's own tree. Add dependencies here if your service grows them, and keep the
+# removal of npm to the final stage.
+FROM node:24-alpine
 ENV NODE_ENV=production PORT=8080
+RUN apk upgrade --no-cache \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 WORKDIR /app
 # No dependencies or build output: a builder stage would add no value here.
 COPY --chown=node:node package.json ./
