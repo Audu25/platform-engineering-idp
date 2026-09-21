@@ -4,7 +4,7 @@
 # fixable, and the two lines below fix them: the OS packages are upgraded, and
 # npm is removed because a service with no dependencies does not need a package
 # manager in production — which also removes every finding in npm's own tree.
-FROM node:24-alpine
+FROM node:26-alpine
 ENV NODE_ENV=production PORT=8080
 RUN apk upgrade --no-cache \
   && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
